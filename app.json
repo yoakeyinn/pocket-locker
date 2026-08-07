@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Pocket Locker",
+    "slug": "pocket-locker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "scheme": "pocketlocker",
+    "splash": {
+      "backgroundColor": "#FAF8F2",
+      "resizeMode": "contain"
+    },
+    "android": {
+      "package": "com.yoakeyinn.pocketlocker",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#FAF8F2"
+      },
+      "permissions": [
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "ACCESS_FINE_LOCATION"
+      ]
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.yoakeyinn.pocketlocker"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "with-rn-bluetooth-classic",
+        {
+          "peripheralUsageDescription": "Permite conectar con tu dispositivo de garaje",
+          "alwaysUsageDescription": "Permite conectar con tu dispositivo de garaje"
+        }
+      ],
+      "expo-font",
+      "react-native-ble-plx"
+    ]
+  }
+}
