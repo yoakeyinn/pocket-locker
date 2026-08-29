@@ -1,8 +1,4 @@
-<p align="center">
-  <img src="./assets/images/icon.png" width="120" alt="Pocket Locker Logo" />
-</p>
-
-# Pocket Locker
+# <img src="./assets/images/icon.png" width="40" height="40" style="border-radius: 50%; vertical-align: middle;" alt="Pocket Locker Logo" /> Pocket Locker
 
 Pocket Locker es una aplicación móvil diseñada para abrir y cerrar puertas peatonales y portones automáticos de garaje desde tu teléfono móvil mediante conexión Bluetooth con una placa ESP32. 
 
