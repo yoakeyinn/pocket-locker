@@ -4,7 +4,7 @@ Sistema de control de accesos inalámbrico para puertas y portones mediante Blue
 
 ---
 
-## Novedades de la versión 1.1.0
+## Novedades de la versión 1.1.1
 
 - Autenticación criptográfica HMAC-SHA256 con protocolo Challenge-Response (anti-replay mediante nonces de un solo uso).
 - Eliminación de comandos directos sin autenticación en el microcontrolador.
