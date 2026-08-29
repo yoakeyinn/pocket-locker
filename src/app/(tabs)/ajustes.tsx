@@ -18,40 +18,95 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/Colors';
 import { useBluetooth } from '../../context/BluetoothContext';
 
+/**
+ * Pantalla de Ajustes y Configuración de Pocket Locker.
+ * Permite:
+ * - Renombrar el dispositivo vinculado.
+ * - Configurar y actualizar el PIN/Clave de seguridad del protocolo.
+ * - Desvincular el locker del dispositivo móvil.
+ * - Alternar el modo de demostración (simulación de pruebas).
+ * - Acceder a los registros (logs) de diagnóstico.
+ */
 export default function AjustesScreen() {
   const {
     deviceMac,
     deviceName,
+    devicePin,
     desvincularDispositivo,
     renombrarDispositivo,
+    actualizarPinDispositivo,
     modoSimulacion,
     setModoSimulacion,
   } = useBluetooth();
 
-  const [modalVisible, setModalVisible] = useState(false);
+  // Estados locales para el modal de renombrar
+  const [modalRenombrarVisible, setModalRenombrarVisible] = useState(false);
   const [nuevoNombre, setNuevoNombre] = useState('');
-  const [guardando, setGuardando] = useState(false);
+  const [guardandoNombre, setGuardandoNombre] = useState(false);
 
+  // Estados locales para el modal de cambiar PIN
+  const [modalPinVisible, setModalPinVisible] = useState(false);
+  const [nuevoPin, setNuevoPin] = useState('');
+  const [guardandoPin, setGuardandoPin] = useState(false);
+
+  /**
+   * Abre el modal para editar el nombre del locker.
+   */
   const abrirRenombrar = useCallback(() => {
     if (!deviceName) return;
     setNuevoNombre(deviceName);
-    setModalVisible(true);
+    setModalRenombrarVisible(true);
   }, [deviceName]);
 
+  /**
+   * Guarda el nuevo nombre asignado al locker.
+   */
   const confirmarRenombrar = useCallback(async () => {
     const nombreLimpio = nuevoNombre.trim();
     if (!nombreLimpio) return;
-    setGuardando(true);
+    setGuardandoNombre(true);
     try {
       await renombrarDispositivo(nombreLimpio);
-      setModalVisible(false);
+      setModalRenombrarVisible(false);
     } catch {
       Alert.alert('Error', 'No se pudo actualizar el nombre del dispositivo');
     } finally {
-      setGuardando(false);
+      setGuardandoNombre(false);
     }
   }, [nuevoNombre, renombrarDispositivo]);
 
+  /**
+   * Abre el modal para editar el PIN de seguridad del locker.
+   */
+  const abrirEditarPin = useCallback(() => {
+    setNuevoPin(devicePin || '7492');
+    setModalPinVisible(true);
+  }, [devicePin]);
+
+  /**
+   * Guarda el nuevo PIN de seguridad verificado.
+   */
+  const confirmarCambiarPin = useCallback(async () => {
+    const pinLimpio = nuevoPin.trim();
+    if (!pinLimpio) {
+      Alert.alert('PIN inválido', 'El PIN de seguridad no puede estar vacío');
+      return;
+    }
+    setGuardandoPin(true);
+    try {
+      await actualizarPinDispositivo(pinLimpio);
+      setModalPinVisible(false);
+      Alert.alert('PIN Actualizado', 'La clave de seguridad para el Pocket Locker ha sido guardada.');
+    } catch {
+      Alert.alert('Error', 'No se pudo actualizar el PIN de seguridad');
+    } finally {
+      setGuardandoPin(false);
+    }
+  }, [nuevoPin, actualizarPinDispositivo]);
+
+  /**
+   * Solicita confirmación y desvincula el locker de la memoria de la aplicación.
+   */
   const handleDesvincular = useCallback(() => {
     Alert.alert(
       'Desvincular dispositivo',
@@ -114,6 +169,23 @@ export default function AjustesScreen() {
                 </View>
               </View>
 
+              <View style={styles.divisor} />
+
+              <View style={styles.infoRow}>
+                <MaterialIcons name="vpn-key" size={24} color={Colors.azulPrimario} />
+                <View style={styles.infoTextContainer}>
+                  <Text style={styles.deviceLabel}>PIN de Seguridad</Text>
+                  <Text style={styles.devicePin}>•••••• ({devicePin || '7492'})</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.btnEditar}
+                  onPress={abrirEditarPin}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons name="edit" size={20} color={Colors.azulPrimario} />
+                </TouchableOpacity>
+              </View>
+
               <TouchableOpacity
                 style={styles.btnEliminar}
                 onPress={handleDesvincular}
@@ -168,8 +240,8 @@ export default function AjustesScreen() {
       <Modal
         animationType="fade"
         transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
+        visible={modalRenombrarVisible}
+        onRequestClose={() => setModalRenombrarVisible(false)}
       >
         <View style={styles.modalOverlay}>
           <KeyboardAvoidingView
@@ -194,8 +266,8 @@ export default function AjustesScreen() {
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={() => setModalVisible(false)}
-                disabled={guardando}
+                onPress={() => setModalRenombrarVisible(false)}
+                disabled={guardandoNombre}
               >
                 <Text style={styles.modalButtonCancelText}>Cancelar</Text>
               </TouchableOpacity>
@@ -203,9 +275,62 @@ export default function AjustesScreen() {
               <TouchableOpacity
                 style={[styles.modalButton, styles.modalButtonConfirm]}
                 onPress={confirmarRenombrar}
-                disabled={guardando}
+                disabled={guardandoNombre}
               >
-                {guardando ? (
+                {guardandoNombre ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <Text style={styles.modalButtonConfirmText}>Guardar</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* Modal para Cambiar PIN de Seguridad */}
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={modalPinVisible}
+        onRequestClose={() => setModalPinVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.modalContent}
+          >
+            <Text style={styles.modalTitle}>PIN de Seguridad</Text>
+            <Text style={styles.modalSubtitle}>
+              Introduce el PIN o clave de seguridad configurado en el firmware del ESP32:
+            </Text>
+
+            <TextInput
+              style={styles.modalInput}
+              value={nuevoPin}
+              onChangeText={setNuevoPin}
+              placeholder="PIN de seguridad (ej. 7492)"
+              placeholderTextColor="#999"
+              autoFocus
+              keyboardType="numeric"
+              maxLength={16}
+            />
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalButtonCancel]}
+                onPress={() => setModalPinVisible(false)}
+                disabled={guardandoPin}
+              >
+                <Text style={styles.modalButtonCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalButtonConfirm]}
+                onPress={confirmarCambiarPin}
+                disabled={guardandoPin}
+              >
+                {guardandoPin ? (
                   <ActivityIndicator color="#FFFFFF" size="small" />
                 ) : (
                   <Text style={styles.modalButtonConfirmText}>Guardar</Text>
@@ -303,6 +428,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '500',
     color: Colors.azulOscuro,
+    marginTop: 2,
+  },
+  devicePin: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.azulPrimario,
     marginTop: 2,
   },
   btnEditar: {

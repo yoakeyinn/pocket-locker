@@ -16,6 +16,16 @@ import * as Haptics from 'expo-haptics';
 import { Colors } from '../constants/Colors';
 import { useBluetooth } from '../context/BluetoothContext';
 
+/**
+ * Pantalla principal de control de accesos (Panel de Control).
+ * Proporciona la interfaz táctil para activar los relés del portón y de la puerta peatonal.
+ *
+ * Características:
+ * - Animaciones de pulso y parpadeo de feedback según el estado de conexión y activación.
+ * - Reconexión automática bajo demanda si el enlace se interrumpe.
+ * - Soporte para Modo Simulación (Testing offline en Expo Go).
+ * - Feedback háptico nativo en cada interacción.
+ */
 export default function ControlScreen() {
   const {
     status,
@@ -26,12 +36,15 @@ export default function ControlScreen() {
     setModoSimulacion,
   } = useBluetooth();
 
+  // Estado de la acción en curso ('peatonal' | 'garaje' | null)
   const [ejecutando, setEjecutando] = useState<'peatonal' | 'garaje' | null>(null);
+
+  // Referencias para animaciones nativas de interfaz
   const pulsePeatonal = useRef(new Animated.Value(1)).current;
   const pulseGaraje = useRef(new Animated.Value(1)).current;
   const blinkValue = useRef(new Animated.Value(1)).current;
 
-  // Animación de parpadeo al conectar
+  // Animación de parpadeo del badge cuando la conexión está en curso
   useEffect(() => {
     let animation: Animated.CompositeAnimation | null = null;
     if (status === 'connecting') {
@@ -60,7 +73,7 @@ export default function ControlScreen() {
     };
   }, [status, blinkValue]);
 
-  // Animación de pulso para la puerta peatonal cuando está activa
+  // Animación de ondas expansivas (pulso) para la puerta peatonal durante su activación
   useEffect(() => {
     let animation: Animated.CompositeAnimation | null = null;
     if (status === 'connected' && ejecutando === 'peatonal') {
@@ -87,7 +100,7 @@ export default function ControlScreen() {
     };
   }, [status, ejecutando, pulsePeatonal]);
 
-  // Animación de pulso para el garaje cuando está activo
+  // Animación de ondas expansivas (pulso) para el garaje durante su activación
   useEffect(() => {
     let animation: Animated.CompositeAnimation | null = null;
     if (status === 'connected' && ejecutando === 'garaje') {
@@ -114,69 +127,77 @@ export default function ControlScreen() {
     };
   }, [status, ejecutando, pulseGaraje]);
 
-  const handleAbrir = useCallback(async (tipo: 'peatonal' | 'garaje', comando: string) => {
-    if (ejecutando) return;
-    Haptics.selectionAsync().catch(() => {});
-    setEjecutando(tipo);
+  /**
+   * Manejador de evento al presionar cualquiera de los pulsadores de apertura.
+   * Realiza validaciones previas de estado, conexión y permisos antes de transmitir.
+   */
+  const handleAbrir = useCallback(
+    async (tipo: 'peatonal' | 'garaje', comando: string) => {
+      if (ejecutando) return;
+      Haptics.selectionAsync().catch(() => {});
+      setEjecutando(tipo);
 
-    try {
-      if (status === 'unpaired') {
-        Alert.alert(
-          'Sin dispositivo',
-          'No hay un dispositivo vinculado. Vincula uno primero.',
-          [
-            { text: 'Cancelar', style: 'cancel' },
-            {
-              text: 'Vincular',
-              onPress: () => router.replace('/(tabs)'),
-            },
-          ]
-        );
-        return;
-      }
-
-      if (status === 'disabled') {
-        Alert.alert('Bluetooth apagado', 'Activa el Bluetooth para continuar');
-        return;
-      }
-
-      if (status === 'unauthorized') {
-        Alert.alert(
-          'Sin permisos',
-          'Concede permisos de Bluetooth a la aplicación en los ajustes.'
-        );
-        return;
-      }
-
-      // Si está desconectado, intentamos conectar primero
-      if (status !== 'connected') {
-        try {
-          await conectar();
-        } catch {
+      try {
+        if (status === 'unpaired') {
           Alert.alert(
-            'Error de conexión',
-            'No se pudo conectar con el dispositivo. Verifica que esté encendido y cerca.'
+            'Sin dispositivo',
+            'No hay un dispositivo vinculado. Vincula uno primero.',
+            [
+              { text: 'Cancelar', style: 'cancel' },
+              {
+                text: 'Vincular',
+                onPress: () => router.replace('/(tabs)'),
+              },
+            ]
           );
           return;
         }
-      }
 
-      // Enviar el comando
-      if (__DEV__) {
-        console.warn(`[DEBUG ARDUINO] Enviando el comando exacto: "${comando}"`);
+        if (status === 'disabled') {
+          Alert.alert('Bluetooth apagado', 'Activa el Bluetooth para continuar');
+          return;
+        }
+
+        if (status === 'unauthorized') {
+          Alert.alert(
+            'Sin permisos',
+            'Concede permisos de Bluetooth a la aplicación en los ajustes del sistema.'
+          );
+          return;
+        }
+
+        // Si el enlace está desconectado, intentamos conectar previamente
+        if (status !== 'connected') {
+          try {
+            await conectar();
+          } catch {
+            Alert.alert(
+              'Error de conexión',
+              'No se pudo conectar con el Pocket Locker. Verifica que esté encendido y dentro del rango de cobertura.'
+            );
+            return;
+          }
+        }
+
+        // Transmisión de comando seguro
+        try {
+          await enviarComando(comando);
+          router.push(`/resultado?exito=true&tipo=${tipo}`);
+        } catch (err: any) {
+          const mensajeError = err?.message || 'No se pudo enviar el comando.';
+          router.push({
+            pathname: '/resultado',
+            params: { exito: 'false', tipo, mensajeError },
+          });
+        }
+      } catch (e: any) {
+        Alert.alert('Error', e?.message || 'Ocurrió un error inesperado');
+      } finally {
+        setEjecutando(null);
       }
-      try {
-        await enviarComando(comando);
-        router.push(`/resultado?exito=true&tipo=${tipo}`);
-      } catch {
-        router.push(`/resultado?exito=false&tipo=${tipo}`);
-      }
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'Ocurrió un error inesperado');
-    } finally {
-      setEjecutando(null);
-    }
-  }, [ejecutando, status, conectar, enviarComando]);
+    },
+    [ejecutando, status, conectar, enviarComando]
+  );
 
   const onVolver = useCallback(() => {
     router.replace('/(tabs)');

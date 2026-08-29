@@ -13,13 +13,21 @@ import * as Haptics from 'expo-haptics';
 import { Colors } from '../constants/Colors';
 import { useBluetooth } from '../context/BluetoothContext';
 
+/**
+ * Pantalla de Confirmación de Resultado de la Operación.
+ * Muestra una confirmación visual clara (ícono de éxito/error animado con muelle)
+ * y emite una notificación háptica nativa para confirmar físicamente al usuario
+ * que el comando fue enviado al microcontrolador.
+ */
 export default function ResultadoScreen() {
-  const params = useLocalSearchParams<{ exito?: string; tipo?: string }>();
+  const params = useLocalSearchParams<{ exito?: string; tipo?: string; mensajeError?: string }>();
   const exito = params.exito === 'true';
   const tipo = params.tipo === 'garaje' ? 'garaje' : 'peatonal';
+  const mensajeError = params.mensajeError;
   const scale = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
+    // Animación de entrada estilo resorte elástico (Spring animation)
     Animated.spring(scale, {
       toValue: 1,
       friction: 5,
@@ -27,7 +35,7 @@ export default function ResultadoScreen() {
       useNativeDriver: true,
     }).start();
 
-    // Feedback háptico de éxito o error
+    // Feedback háptico específico según el resultado
     if (exito) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
     } else {
@@ -49,7 +57,7 @@ export default function ResultadoScreen() {
     try {
       await desconectar();
     } catch {
-      // ignorar
+      // Ignorar posibles fallos al desconectar
     }
     router.replace('/(tabs)');
   }, [desconectar]);
@@ -69,12 +77,12 @@ export default function ResultadoScreen() {
         </Animated.View>
 
         <Text style={styles.titulo}>
-          {exito ? 'Comando enviado' : 'Error'}
+          {exito ? 'Comando enviado' : 'No se pudo abrir'}
         </Text>
         <Text style={styles.subtitulo}>
           {exito
             ? tituloOk
-            : 'No se pudo enviar el comando. Verifica la conexión.'}
+            : mensajeError || 'No se pudo enviar el comando. Verifica la conexión con el Pocket Locker.'}
         </Text>
 
         <View style={styles.botones}>

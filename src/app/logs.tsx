@@ -14,11 +14,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import LogService, { LogEntry } from '../services/LogService';
 import { Colors } from '../constants/Colors';
 
+/**
+ * Pantalla de Diagnóstico y Visor de Registros (Logs).
+ * Permite a desarrolladores y técnicos inspeccionar en tiempo real las operaciones
+ * Bluetooth, cambios de estado, tramas enviadas y posibles errores del sistema.
+ */
 export default function LogsScreen() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [modoTextoCopiar, setModoTextoCopiar] = useState(false);
 
   useEffect(() => {
+    // Suscripción reactiva al servicio central de logging
     const unsubscribe = LogService.subscribe((currentLogs) => {
       setLogs(currentLogs);
     });

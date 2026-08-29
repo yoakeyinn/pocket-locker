@@ -20,6 +20,12 @@ import { Colors } from '../../constants/Colors';
 import BluetoothService, { DispositivoBT } from '../../services/BluetoothService';
 import { useBluetooth } from '../../context/BluetoothContext';
 
+/**
+ * Pantalla Principal (Tab Inicio).
+ * Comportamiento dual dinámico:
+ * 1. Si no hay ningún Pocket Locker vinculado: Muestra interfaz de escaneo, búsqueda y vinculación.
+ * 2. Si ya existe un Pocket Locker vinculado: Muestra la tarjeta de estado del locker y botón de acceso al panel de control.
+ */
 export default function InicioScreen() {
   const {
     deviceMac,
@@ -38,6 +44,9 @@ export default function InicioScreen() {
   const [nombrePersonalizado, setNombrePersonalizado] = useState('');
   const [guardando, setGuardando] = useState(false);
 
+  /**
+   * Ejecuta el escaneo de dispositivos Bluetooth cercanos en Classic y BLE.
+   */
   const buscarDispositivos = useCallback(async () => {
     setEscaneando(true);
     try {
@@ -53,7 +62,7 @@ export default function InicioScreen() {
       if (!soportado) {
         Alert.alert(
           'Bluetooth no disponible',
-          'Tu dispositivo no soporta Bluetooth Clásico'
+          'Tu dispositivo móvil no soporta Bluetooth'
         );
         return;
       }
@@ -76,7 +85,7 @@ export default function InicioScreen() {
       if (lista.length === 0) {
         Alert.alert(
           'Sin dispositivos',
-          'No se encontraron dispositivos vinculados. Asegúrate de que esté encendido y emparejado en los ajustes del sistema.'
+          'No se encontraron dispositivos cercanos o emparejados. Asegúrate de que tu Pocket Locker esté encendido.'
         );
       }
     } catch (e: any) {
@@ -86,12 +95,18 @@ export default function InicioScreen() {
     }
   }, [modoSimulacion]);
 
+  /**
+   * Inicia el flujo de vinculación abriendo el diálogo para asignar un nombre amigable.
+   */
   const iniciarVinculacion = useCallback((dispositivo: DispositivoBT) => {
     setDispositivoSeleccionado(dispositivo);
     setNombrePersonalizado(dispositivo.name.replace(' (SIMULADO)', ''));
     setModalVisible(true);
   }, []);
 
+  /**
+   * Confirma y guarda la vinculación del dispositivo seleccionado.
+   */
   const confirmarVinculacion = useCallback(async () => {
     if (!dispositivoSeleccionado) return;
     const nombre = nombrePersonalizado.trim() || dispositivoSeleccionado.name;
@@ -111,17 +126,23 @@ export default function InicioScreen() {
     }
   }, [dispositivoSeleccionado, nombrePersonalizado, actualizarDispositivoVinculado]);
 
+  /**
+   * Navega hacia la pantalla de control de accesos intentando conectar si es necesario.
+   */
   const entrarAlDispositivo = useCallback(async () => {
     if (status !== 'connected') {
       try {
         await conectar();
       } catch {
-        // Ignorar fallos de reconexión inmediata, entramos de todos modos
+        // Permitir entrar a la pantalla de control incluso si requiere reconexión allí
       }
     }
     router.push('/control');
   }, [status, conectar]);
 
+  /**
+   * Renderizado individual de cada dispositivo encontrado en la lista de escaneo.
+   */
   const renderDeviceItem = useCallback(({ item }: { item: DispositivoBT }) => (
     <TouchableOpacity
       style={styles.deviceItem}

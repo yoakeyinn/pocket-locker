@@ -5,6 +5,11 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { Colors } from '../constants/Colors';
 import { useBluetooth } from '../context/BluetoothContext';
 
+/**
+ * Pantalla de Carga y Bienvenida (Splash Screen).
+ * Muestra el logotipo corporativo animado junto a una barra de progreso mientras
+ * se cargan las credenciales y configuración del Bluetooth en segundo plano.
+ */
 export default function SplashScreen() {
   const { cargando } = useBluetooth();
   const opacity = useRef(new Animated.Value(1)).current;
@@ -12,9 +17,10 @@ export default function SplashScreen() {
   const [minTimeElapsed, setMinTimeElapsed] = useState(false);
 
   useEffect(() => {
+    // Animación de barra de progreso inicial (3 segundos)
     Animated.timing(progress, {
       toValue: 1,
-      duration: 3000, // 3 seconds
+      duration: 3000,
       useNativeDriver: false,
     }).start(() => {
       setMinTimeElapsed(true);

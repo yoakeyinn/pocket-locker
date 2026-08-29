@@ -4,21 +4,34 @@ import RNBluetoothClassic, {
 import { BleManager, Device } from 'react-native-ble-plx';
 import { PermissionsAndroid, Platform, NativeModules } from 'react-native';
 
+/**
+ * Representación unificada de un dispositivo Bluetooth detectado (Clásico o BLE).
+ */
 export interface DispositivoBT {
   name: string;
   address: string;
   type: 'classic' | 'ble';
 }
 
+/**
+ * Servicio centralizado para la gestión de comunicaciones Bluetooth.
+ * Soporta de forma transparente:
+ * - Bluetooth Clásico (RFCOMM / SPP) mediante react-native-bluetooth-classic.
+ * - Bluetooth Low Energy (GATT / BLE) mediante react-native-ble-plx.
+ */
 class BluetoothServiceClass {
   private bleManager: BleManager | null = null;
   private dispositivoConectadoClassic: BluetoothDevice | null = null;
   private dispositivoConectadoBle: Device | null = null;
   private onDesconexionCallback: (() => void) | null = null;
+  private onDatosRecibidosCallback: ((data: string) => void) | null = null;
   private disconnectSubscription: any = null;
+  private classicDisconnectSubscription: any = null;
+  private dataSubscription: any = null;
+  private bleScanTimeout: NodeJS.Timeout | null = null;
 
   /**
-   * Comprueba si el módulo nativo de Bluetooth Clásico está disponible.
+   * Comprueba de manera segura si el módulo nativo de Bluetooth Clásico está vinculado en la plataforma.
    */
   private esClassicDisponible(): boolean {
     try {
@@ -29,21 +42,39 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Registra una función de retorno para cuando el dispositivo BLE conectado se desconecta de forma inesperada.
+   * Registra una función de retorno (callback) que se invocará cuando el dispositivo
+   * conectado se desconecte de forma inesperada.
    */
   registrarOnDesconexion(callback: () => void) {
     this.onDesconexionCallback = callback;
   }
 
   /**
-   * Configura la escucha activa de desconexión para el dispositivo BLE.
+   * Registra un callback para recibir telemetría y respuestas estructuradas del locker.
+   */
+  registrarOnDatosRecibidos(callback: (data: string) => void) {
+    this.onDatosRecibidosCallback = callback;
+  }
+
+  /**
+   * Notifica a los suscriptores la recepción de una nueva línea de telemetría.
+   */
+  private notificarDatosRecibidos(data: string) {
+    const dataLimpia = data.trim();
+    if (dataLimpia.length > 0 && this.onDatosRecibidosCallback) {
+      this.onDatosRecibidosCallback(dataLimpia);
+    }
+  }
+
+  /**
+   * Configura la escucha activa de eventos de desconexión física para el dispositivo BLE conectado.
    */
   private registrarMonitoreoDesconexion(device: Device) {
     if (this.disconnectSubscription) {
       try {
         this.disconnectSubscription.remove();
       } catch (e) {
-        // Ignorar
+        // Ignorar posibles errores al limpiar suscripciones previas
       }
     }
 
@@ -60,7 +91,87 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Obtiene la instancia de BleManager de forma perezosa y segura.
+   * Configura la escucha activa de desconexión física para el dispositivo Bluetooth Clásico.
+   */
+  private registrarMonitoreoDesconexionClassic(device: BluetoothDevice, address: string) {
+    if (this.classicDisconnectSubscription) {
+      try {
+        this.classicDisconnectSubscription.remove();
+      } catch (e) {
+        // Ignorar
+      }
+      this.classicDisconnectSubscription = null;
+    }
+
+    if (device && typeof (device as any).onDisconnected === 'function') {
+      try {
+        this.classicDisconnectSubscription = (device as any).onDisconnected(() => {
+          console.log('[Classic] Dispositivo desconectado físicamente:', address);
+          if (this.onDesconexionCallback) {
+            this.onDesconexionCallback();
+          }
+          this.dispositivoConectadoClassic = null;
+        });
+      } catch (e) {
+        console.warn('Error al registrar listener de desconexión en device Classic', e);
+      }
+    } else if (this.esClassicDisponible() && typeof (RNBluetoothClassic as any).onDeviceDisconnected === 'function') {
+      try {
+        this.classicDisconnectSubscription = (RNBluetoothClassic as any).onDeviceDisconnected(
+          (event: { address?: string }) => {
+            if (event && event.address && event.address.toLowerCase() === address.toLowerCase()) {
+              console.log('[Classic] Evento nativo de desconexión recibido para:', event.address);
+              if (this.onDesconexionCallback) {
+                this.onDesconexionCallback();
+              }
+              this.dispositivoConectadoClassic = null;
+            }
+          }
+        );
+      } catch (e) {
+        console.warn('Error registrando listener global de desconexión Classic', e);
+      }
+    }
+
+    // Registrar escucha activa de lectura entrante (telemetría)
+    if (this.dataSubscription) {
+      try {
+        this.dataSubscription.remove();
+      } catch (e) {
+        // Ignorar
+      }
+      this.dataSubscription = null;
+    }
+
+    if (device && typeof (device as any).onDataReceived === 'function') {
+      try {
+        this.dataSubscription = (device as any).onDataReceived((event: { data: string }) => {
+          if (event && event.data) {
+            this.notificarDatosRecibidos(event.data);
+          }
+        });
+      } catch (e) {
+        console.warn('Error al registrar listener de datos en device Classic', e);
+      }
+    } else if (this.esClassicDisponible() && typeof (RNBluetoothClassic as any).onDeviceRead === 'function') {
+      try {
+        this.dataSubscription = (RNBluetoothClassic as any).onDeviceRead(
+          address,
+          (event: { data?: string }) => {
+            if (event && event.data) {
+              this.notificarDatosRecibidos(event.data);
+            }
+          }
+        );
+      } catch (e) {
+        console.warn('Error al registrar onDeviceRead global', e);
+      }
+    }
+  }
+
+  /**
+   * Obtiene o instancia el manejador BleManager de forma perezosa (Lazy Initialization)
+   * para evitar sobrecoste en el arranque.
    */
   private getBleManager(): BleManager | null {
     try {
@@ -69,13 +180,13 @@ class BluetoothServiceClass {
       }
       return this.bleManager;
     } catch (e) {
-      console.warn('[BLE] El módulo react-native-ble-plx no está disponible', e);
+      console.warn('[BLE] El módulo react-native-ble-plx no está disponible en este entorno', e);
       return null;
     }
   }
 
   /**
-   * Solicita los permisos necesarios en Android.
+   * Solicita al usuario los permisos de sistema requeridos en Android (incluyendo Android 12+ API 31+).
    */
   async solicitarPermisos(): Promise<boolean> {
     if (Platform.OS !== 'android') return true;
@@ -86,6 +197,7 @@ class BluetoothServiceClass {
         : parseInt(String(Platform.Version), 10);
 
       if (apiLevel >= 31) {
+        // Android 12+ requiere BLUETOOTH_SCAN y BLUETOOTH_CONNECT en tiempo de ejecución
         const granted = await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
@@ -99,26 +211,25 @@ class BluetoothServiceClass {
             PermissionsAndroid.RESULTS.GRANTED
         );
       } else {
+        // Versiones anteriores a Android 12 requieren ACCESS_FINE_LOCATION para escanear
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         );
         return granted === PermissionsAndroid.RESULTS.GRANTED;
       }
     } catch (e) {
-      console.warn('Error solicitando permisos BT', e);
+      console.warn('Error solicitando permisos Bluetooth en el dispositivo', e);
       return false;
     }
   }
 
   /**
-   * Comprueba si el dispositivo soporta Bluetooth.
+   * Determina si el hardware del teléfono admite conectividad Bluetooth (Clásico o BLE).
    */
   async esSoportado(): Promise<boolean> {
-    // Si BLE está disponible, consideramos que es soportado (soporta BLE en iOS/Android)
     if (this.getBleManager() !== null) {
       return true;
     }
-    // Si no, comprobamos soporte de Classic de forma segura
     if (this.esClassicDisponible()) {
       try {
         return await RNBluetoothClassic.isBluetoothAvailable();
@@ -130,20 +241,18 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Comprueba si el Bluetooth está activado.
+   * Comprueba si el adaptador Bluetooth del teléfono está actualmente encendido.
    */
   async estaEncendido(): Promise<boolean> {
-    // Comprobación con Classic en Android
     if (this.esClassicDisponible()) {
       try {
         const activeClassic = await RNBluetoothClassic.isBluetoothEnabled();
         if (activeClassic) return true;
       } catch (e) {
-        // Ignorar
+        // Continuar con verificación BLE
       }
     }
 
-    // Comprobación alternativa con BLE
     const manager = this.getBleManager();
     if (manager) {
       try {
@@ -158,7 +267,7 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Solicita al sistema activar el Bluetooth.
+   * Solicita al sistema operativo habilitar el adaptador Bluetooth si está apagado.
    */
   async pedirActivar(): Promise<boolean> {
     if (this.esClassicDisponible()) {
@@ -172,7 +281,10 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Devuelve los dispositivos emparejados + descubre nuevos cercanos (Clásicos y BLE).
+   * Realiza un escaneo exhaustivo unificado descubriendo:
+   * 1. Dispositivos clásicos emparejados (Android bonded devices).
+   * 2. Nuevos dispositivos clásicos en rango de descubrimiento.
+   * 3. Dispositivos BLE anunciándose en las inmediaciones.
    */
   async listarDispositivos(): Promise<DispositivoBT[]> {
     const okPermisos = await this.solicitarPermisos();
@@ -180,12 +292,12 @@ class BluetoothServiceClass {
       throw new Error('Permisos de Bluetooth no concedidos');
     }
 
-    // Cancelar cualquier escaneo o descubrimiento previo para evitar colisiones y fugas
+    // Cancelar cualquier escaneo previo para evitar colisiones y fugas de recursos
     await this.cancelarDescubrimiento();
 
     const mapa = new Map<string, DispositivoBT>();
 
-    // 1. Obtener dispositivos emparejados clásicos (Solo Android si Classic está disponible)
+    // 1. Obtener dispositivos emparejados previamente en el sistema (Classic)
     if (this.esClassicDisponible()) {
       try {
         const emparejados = await RNBluetoothClassic.getBondedDevices();
@@ -201,10 +313,10 @@ class BluetoothServiceClass {
       }
     }
 
-    // 2. Escaneos en paralelo (Descubrimiento Clásico y Escaneo BLE)
+    // 2. Ejecutar escaneos de descubrimiento en paralelo
     const promesas: Promise<void>[] = [];
 
-    // Classic Discovery (Solo Android, si está disponible)
+    // Descubrimiento de Bluetooth Clásico (Android)
     if (this.esClassicDisponible()) {
       promesas.push(
         (async () => {
@@ -227,7 +339,7 @@ class BluetoothServiceClass {
       );
     }
 
-    // BLE Scan (iOS y Android)
+    // Escaneo de Bluetooth Low Energy (iOS y Android)
     const manager = this.getBleManager();
     if (manager) {
       promesas.push(
@@ -247,8 +359,12 @@ class BluetoothServiceClass {
             }
           });
 
-          // Limitar escaneo BLE a 4 segundos
-          setTimeout(() => {
+          // Limitar escaneo activo BLE a 4 segundos de forma controlada
+          if (this.bleScanTimeout) {
+            clearTimeout(this.bleScanTimeout);
+          }
+
+          this.bleScanTimeout = setTimeout(() => {
             try {
               manager.stopDeviceScan();
             } catch (e) {
@@ -264,6 +380,7 @@ class BluetoothServiceClass {
                 });
               }
             });
+            this.bleScanTimeout = null;
             resolve();
           }, 4000);
         })
@@ -276,10 +393,20 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Conecta al dispositivo indicado según su tipo.
+   * Establece conexión inalámbrica con el locker especificado con timeout controlado.
+   *
+   * @param address Dirección MAC física o UUID del dispositivo
+   * @param type Tipo de conexión ('classic' o 'ble')
    */
   async conectar(address: string, type: 'classic' | 'ble' = 'classic'): Promise<void> {
     await this.cancelarDescubrimiento();
+
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error('Tiempo de espera agotado: El Pocket Locker no responde')),
+        4500
+      )
+    );
 
     if (type === 'classic') {
       if (!this.esClassicDisponible()) {
@@ -295,10 +422,16 @@ class BluetoothServiceClass {
           if (sigueConectado) return;
         }
 
-        const device = await RNBluetoothClassic.connectToDevice(address, {
-          delimiter: '\n',
-        });
+        const device = await Promise.race([
+          RNBluetoothClassic.connectToDevice(address, {
+            delimiter: '\n',
+          }),
+          timeoutPromise,
+        ]);
         this.dispositivoConectadoClassic = device;
+
+        // Registrar escucha activa de desconexión física y datos para Classic
+        this.registrarMonitoreoDesconexionClassic(device, address);
       } catch (e: any) {
         this.dispositivoConectadoClassic = null;
         throw new Error(
@@ -320,11 +453,14 @@ class BluetoothServiceClass {
           if (sigueConectado) return;
         }
 
-        const device = await manager.connectToDevice(address);
+        const device = await Promise.race([
+          manager.connectToDevice(address),
+          timeoutPromise,
+        ]);
         await device.discoverAllServicesAndCharacteristics();
         this.dispositivoConectadoBle = device;
 
-        // Registrar monitoreo activo de desconexión
+        // Registrar escucha activa de desconexión física para BLE
         this.registrarMonitoreoDesconexion(device);
       } catch (e: any) {
         this.dispositivoConectadoBle = null;
@@ -336,9 +472,15 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Envía un comando de texto al dispositivo conectado.
+   * Envía un comando o trama de datos segura al microcontrolador conectado.
+   *
+   * @param comando Cadena de caracteres o trama formateada (ej. 'E', 'H' o 'PLK:7492:E\n')
+   * @param type Tipo de conexión activa
    */
   async enviarComando(comando: string, type: 'classic' | 'ble' = 'classic'): Promise<void> {
+    // Asegurar que las tramas multicarácter finalicen con salto de línea si es protocolo seguro
+    const payload = comando.endsWith('\n') ? comando : `${comando}\n`;
+
     if (type === 'classic') {
       if (!this.esClassicDisponible()) {
         throw new Error('El módulo nativo de Bluetooth Clásico no está disponible en este dispositivo');
@@ -347,7 +489,7 @@ class BluetoothServiceClass {
         throw new Error('No hay dispositivo Clásico conectado');
       }
       try {
-        await this.dispositivoConectadoClassic.write(comando);
+        await this.dispositivoConectadoClassic.write(payload);
       } catch (e: any) {
         throw new Error(
           `No se pudo enviar el comando clásico: ${e?.message || 'desconocido'}`,
@@ -363,7 +505,7 @@ class BluetoothServiceClass {
           throw new Error('No se encontró ninguna característica de escritura en el dispositivo BLE');
         }
 
-        const base64Comando = this.toBase64(comando);
+        const base64Comando = this.toBase64(payload);
         if (writeDetails.isWritableWithoutResponse) {
           await this.dispositivoConectadoBle.writeCharacteristicWithoutResponseForService(
             writeDetails.serviceUUID,
@@ -386,7 +528,73 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Desconecta el dispositivo activo.
+   * Envía un comando y espera de forma asíncrona la confirmación o código de error del ESP32.
+   *
+   * @param comando Comando o trama a transmitir
+   * @param type Tipo de enlace Bluetooth ('classic' | 'ble')
+   * @param timeoutMs Tiempo máximo de espera para la respuesta (por defecto 3000 ms)
+   * @returns Respuesta estructurada recibida del microcontrolador
+   */
+  async enviarComandoConRespuesta(
+    comando: string,
+    type: 'classic' | 'ble' = 'classic',
+    timeoutMs: number = 3000
+  ): Promise<string> {
+    return new Promise<string>(async (resolve, reject) => {
+      let finalizado = false;
+      const callbackOriginal = this.onDatosRecibidosCallback;
+
+      const limpiar = () => {
+        finalizado = true;
+        clearTimeout(timer);
+        this.onDatosRecibidosCallback = callbackOriginal;
+      };
+
+      const timer = setTimeout(() => {
+        if (!finalizado) {
+          limpiar();
+          // Fallback tolerante: si se agota el tiempo pero el write fue OK, consideramos enviado
+          resolve('OK:TIMEOUT_FALLBACK');
+        }
+      }, timeoutMs);
+
+      this.onDatosRecibidosCallback = (linea: string) => {
+        if (callbackOriginal) callbackOriginal(linea);
+
+        if (finalizado) return;
+
+        if (linea.startsWith('OK:')) {
+          limpiar();
+          resolve(linea);
+        } else if (linea.startsWith('ERR:COOLDOWN:')) {
+          limpiar();
+          const partes = linea.split(':');
+          const ms = parseInt(partes[2] || '2000', 10);
+          const seg = (ms / 1000).toFixed(1);
+          reject(new Error(`Relé en enfriamiento. Espera ${seg}s para volver a pulsar.`));
+        } else if (linea.startsWith('ERR:EN_EJECUCION:')) {
+          limpiar();
+          reject(new Error('La apertura ya se encuentra en ejecución actualmente.'));
+        } else if (linea.startsWith('ERR:AUTH_INVALIDA') || linea.startsWith('ERR:AUTH_FALLIDA')) {
+          limpiar();
+          reject(new Error('Clave o firma de seguridad incorrecta. Revisa el PIN en Ajustes.'));
+        } else if (linea.startsWith('ERR:')) {
+          limpiar();
+          reject(new Error(`Error del locker: ${linea}`));
+        }
+      };
+
+      try {
+        await this.enviarComando(comando, type);
+      } catch (e) {
+        limpiar();
+        reject(e);
+      }
+    });
+  }
+
+  /**
+   * Cierra de forma ordenada y limpia cualquier conexión activa existente.
    */
   async desconectar(): Promise<void> {
     if (this.disconnectSubscription) {
@@ -396,6 +604,24 @@ class BluetoothServiceClass {
         // Ignorar
       }
       this.disconnectSubscription = null;
+    }
+
+    if (this.classicDisconnectSubscription) {
+      try {
+        this.classicDisconnectSubscription.remove();
+      } catch (e) {
+        // Ignorar
+      }
+      this.classicDisconnectSubscription = null;
+    }
+
+    if (this.dataSubscription) {
+      try {
+        this.dataSubscription.remove();
+      } catch (e) {
+        // Ignorar
+      }
+      this.dataSubscription = null;
     }
 
     if (this.esClassicDisponible() && this.dispositivoConectadoClassic) {
@@ -420,7 +646,7 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Indica si actualmente hay conexión activa.
+   * Verifica si actualmente existe un enlace de comunicación abierto con el hardware.
    */
   async estaConectado(type: 'classic' | 'ble' = 'classic'): Promise<boolean> {
     if (type === 'classic') {
@@ -441,9 +667,14 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Cancela el descubrimiento activo de dispositivos.
+   * Cancela cualquier proceso de búsqueda o escaneo activo en ambos subsistemas.
    */
   async cancelarDescubrimiento(): Promise<void> {
+    if (this.bleScanTimeout) {
+      clearTimeout(this.bleScanTimeout);
+      this.bleScanTimeout = null;
+    }
+
     if (this.esClassicDisponible()) {
       try {
         await RNBluetoothClassic.cancelDiscovery();
@@ -462,7 +693,7 @@ class BluetoothServiceClass {
   }
 
   /**
-   * Encuentra de forma genérica la primera característica escribible.
+   * Inspecciona los servicios del dispositivo BLE para encontrar la primera característica escribible.
    */
   private async encontrarCaracteristicaEscritura(device: Device): Promise<{
     serviceUUID: string;
@@ -485,13 +716,13 @@ class BluetoothServiceClass {
       }
       return null;
     } catch (e) {
-      console.warn('Error buscando características de escritura', e);
+      console.warn('Error buscando características de escritura BLE', e);
       return null;
     }
   }
 
   /**
-   * Convierte un string a Base64 sin dependencias nativas externas.
+   * Convierte una cadena de texto a codificación Base64 en puro JavaScript sin dependencias nativas.
    */
   private toBase64(str: string): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
