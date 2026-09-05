@@ -31,7 +31,7 @@
 // PARÁMETROS DE SEGURIDAD Y TIEMPOS (MILISEGUNDOS)
 // =============================================================================
 static const char* BT_DEVICE_NAME = "sblas20";
-static const char* DEFAULT_PIN = "7492";
+static const char* DEFAULT_PIN = "2415";
 static const char* NVS_NAMESPACE = "pocket_lk";
 static const char* NVS_KEY_PIN = "sec_pin";
 
@@ -69,7 +69,7 @@ BluetoothSerial ESP_BT;
 Preferences preferences;
 
 // Clave de seguridad cargada desde NVS
-static char secretKey[32] = "7492";
+static char secretKey[32] = "2415";
 
 // Challenge Nonce activo (32 hex chars + null terminator)
 static char currentChallenge[33] = {0};
