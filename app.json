@@ -23,7 +23,8 @@
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.BLUETOOTH_ADVERTISE"
       ]
     },
     "ios": {
@@ -46,7 +47,7 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "cc9c2282-7e0e-4b95-aa6b-4accccb8eeee"
+        "projectId": "30c00fa6-7d04-44dd-8f0a-99a5bbf25f72"
       }
     }
   }
