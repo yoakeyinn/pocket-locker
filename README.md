@@ -61,7 +61,7 @@ cd pocket-locker
     ```bash
     pio run -t upload
     ```
-6. Cuando la terminal muestre `[SUCCESS]`, el ESP32 ya estará emitiendo señal Bluetooth con el nombre **sblas20** y el PIN por defecto **2415**.
+6. Cuando la terminal muestre `[SUCCESS]`, el ESP32 ya estará emitiendo señal Bluetooth con el nombre **PLBT** y el PIN por defecto **2415**.
 
 ---
 
@@ -120,7 +120,7 @@ Para conectarte físicamente al ESP32 por Bluetooth necesitas generar la compila
 1. Enciende el Bluetooth de tu teléfono móvil.
 2. Abre la aplicación **Pocket Locker**.
 3. En la pantalla principal, pulsa **Buscar dispositivos**.
-4. Selecciona el dispositivo **sblas20** de la lista.
+4. Selecciona el dispositivo **PLBT** de la lista.
 5. Introduce el PIN de seguridad por defecto: `2415`.
 6. En el panel de control, pulsa **Abrir Puerta** o **Abrir Garaje**. El ESP32 activará el relé correspondiente durante 1 segundo.
 

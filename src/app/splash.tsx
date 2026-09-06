@@ -1,23 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
-import { Animated, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
-import { Colors } from '../constants/Colors';
 import { useBluetooth } from '../context/BluetoothContext';
+import tw from '../styles/tailwind';
 
 /**
  * Pantalla de Carga y Bienvenida (Splash Screen).
  * Muestra el logotipo corporativo animado junto a una barra de progreso mientras
  * se cargan las credenciales y configuración del Bluetooth en segundo plano.
+ * Estilizado exclusivamente con Tailwind CSS.
  */
 export default function SplashScreen() {
-  const { cargando } = useBluetooth();
+  const { cargando, userName } = useBluetooth();
   const opacity = useRef(new Animated.Value(1)).current;
   const progress = useRef(new Animated.Value(0)).current;
   const [minTimeElapsed, setMinTimeElapsed] = useState(false);
 
   useEffect(() => {
-    // Animación de barra de progreso inicial (3 segundos)
     Animated.timing(progress, {
       toValue: 1,
       duration: 3000,
@@ -34,21 +34,31 @@ export default function SplashScreen() {
         duration: 350,
         useNativeDriver: true,
       }).start(() => {
-        router.replace('/(tabs)');
+        if (userName) {
+          router.replace('/(tabs)');
+        } else {
+          router.replace('/nombre');
+        }
       });
     }
-  }, [cargando, minTimeElapsed, opacity]);
+  }, [cargando, minTimeElapsed, opacity, userName]);
 
   return (
-    <Animated.View style={[styles.container, { opacity }]}>
-      <MaterialIcons name="lock" size={80} color={Colors.azulPrimario} />
-      <Text style={styles.title}>POCKET LOCKER</Text>
-      <Text style={styles.subtitle}>Control de acceso</Text>
-      
-      <View style={styles.progressBarContainer}>
+    <Animated.View style={[tw`flex-1 items-center justify-center bg-beige-bg`, { opacity }]}>
+      <View style={tw`w-28 h-28 rounded-3xl bg-azul-claro items-center justify-center shadow-sm mb-2`}>
+        <MaterialIcons name="lock" size={64} color="#2C5F8A" />
+      </View>
+      <Text style={tw`text-2xl font-black text-azul-oscuro mt-4 tracking-widest uppercase`}>
+        Pocket Locker
+      </Text>
+      <Text style={tw`text-sm font-semibold text-texto-secundario mt-1 tracking-wide`}>
+        Control de acceso seguro
+      </Text>
+
+      <View style={tw`w-2/3 h-2 bg-stone-200 rounded-full mt-12 overflow-hidden shadow-inner`}>
         <Animated.View
           style={[
-            styles.progressBar,
+            tw`h-full bg-azul-primario rounded-full`,
             {
               width: progress.interpolate({
                 inputRange: [0, 1],
@@ -61,37 +71,3 @@ export default function SplashScreen() {
     </Animated.View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Colors.beigeBg,
-  },
-  title: {
-    color: Colors.azulOscuro,
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginTop: 16,
-    letterSpacing: 2,
-  },
-  subtitle: {
-    color: Colors.textoSecundario,
-    fontSize: 14,
-    marginTop: 8,
-  },
-  progressBarContainer: {
-    width: '65%',
-    height: 6,
-    backgroundColor: 'rgba(0,0,0,0.06)',
-    borderRadius: 3,
-    marginTop: 48,
-    overflow: 'hidden',
-  },
-  progressBar: {
-    height: '100%',
-    backgroundColor: Colors.azulPrimario,
-    borderRadius: 3,
-  },
-});

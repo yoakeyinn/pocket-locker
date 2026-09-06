@@ -1,576 +1,292 @@
-import { useState, useCallback } from "react"
+import React, { useState, useCallback } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    StyleSheet,
-    Switch,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
-    KeyboardAvoidingView,
-    Platform,
-} from "react-native"
-import { router } from "expo-router"
-import { MaterialIcons } from "@expo/vector-icons"
-import { SafeAreaView } from "react-native-safe-area-context"
-import { Colors } from "../../constants/Colors"
-import { useBluetooth } from "../../context/BluetoothContext"
+  Alert,
+  ScrollView,
+  Text,
+  View,
+} from 'react-native';
+import { router } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useBluetooth } from '../../context/BluetoothContext';
+import { parsearYValidarPin } from '../../services/StorageService';
+import BiometricService from '../../services/BiometricService';
+import UsuarioCard from '../../components/ajustes/UsuarioCard';
+import DispositivoCard from '../../components/ajustes/DispositivoCard';
+import PreferenciasCard from '../../components/ajustes/PreferenciasCard';
+import AppInfoCard from '../../components/ajustes/AppInfoCard';
+import ModalRenombrar from '../../components/ajustes/ModalRenombrar';
+import ModalEditarPin from '../../components/ajustes/ModalEditarPin';
+import tw from '../../styles/tailwind';
 
 /**
- * Pantalla de Ajustes y Configuración de Pocket Locker.
- * Permite:
- * - Renombrar el dispositivo vinculado.
- * - Configurar y actualizar el PIN/Clave de seguridad del protocolo.
- * - Desvincular el locker del dispositivo móvil.
- * - Alternar el modo de demostración (simulación de pruebas).
- * - Acceder a los registros (logs) de diagnóstico.
+ * Pantalla de Ajustes y Configuración (Tab Ajustes).
+ * Permite gestionar:
+ * 1. Nombre de usuario y rol (Administrador vs Estándar).
+ * 2. Datos del dispositivo vinculado (nombre, MAC, PIN).
+ * 3. Preferencias de última puerta y sincronización con el ESP32.
+ * 4. Acceso directo a diagnósticos y registros del sistema.
  */
 export default function AjustesScreen() {
-    const {
-        deviceMac,
-        deviceName,
-        devicePin,
-        desvincularDispositivo,
-        renombrarDispositivo,
-        actualizarPinDispositivo,
-        modoSimulacion,
-        setModoSimulacion,
-    } = useBluetooth()
+  const {
+    deviceName,
+    deviceMac,
+    devicePin,
+    userName,
+    userRole,
+    desvincularDispositivo,
+    renombrarDispositivo,
+    actualizarPinDispositivo,
+    guardarNombreUsuario,
+    sincronizarConLocker,
+  } = useBluetooth();
 
-    // Estados locales para el modal de renombrar
-    const [modalRenombrarVisible, setModalRenombrarVisible] = useState(false)
-    const [nuevoNombre, setNuevoNombre] = useState("")
-    const [guardandoNombre, setGuardandoNombre] = useState(false)
+  const [modalRenombrarVisible, setModalRenombrarVisible] = useState(false);
+  const [nuevoNombreDispositivo, setNuevoNombreDispositivo] = useState('');
+  const [guardandoNombreDispositivo, setGuardandoNombreDispositivo] = useState(false);
 
-    // Estados locales para el modal de cambiar PIN
-    const [modalPinVisible, setModalPinVisible] = useState(false)
-    const [nuevoPin, setNuevoPin] = useState("")
-    const [guardandoPin, setGuardandoPin] = useState(false)
+  const [modalEditarNombreUsuario, setModalEditarNombreUsuario] = useState(false);
+  const [nuevoNombreUsuario, setNuevoNombreUsuario] = useState('');
+  const [guardandoNombreUsuario, setGuardandoNombreUsuario] = useState(false);
 
-    /**
-     * Abre el modal para editar el nombre del locker.
-     */
-    const abrirRenombrar = useCallback(() => {
-        if (!deviceName) return
-        setNuevoNombre(deviceName)
-        setModalRenombrarVisible(true)
-    }, [deviceName])
+  const [modalPinVisible, setModalPinVisible] = useState(false);
+  const [nuevoPin, setNuevoPin] = useState('');
+  const [guardandoPin, setGuardandoPin] = useState(false);
 
-    /**
-     * Guarda el nuevo nombre asignado al locker.
-     */
-    const confirmarRenombrar = useCallback(async () => {
-        const nombreLimpio = nuevoNombre.trim()
-        if (!nombreLimpio) return
-        setGuardandoNombre(true)
-        try {
-            await renombrarDispositivo(nombreLimpio)
-            setModalRenombrarVisible(false)
-        } catch {
-            Alert.alert("Error", "No se pudo actualizar el nombre del dispositivo")
-        } finally {
-            setGuardandoNombre(false)
-        }
-    }, [nuevoNombre, renombrarDispositivo])
+  const [sincronizando, setSincronizando] = useState(false);
 
-    /**
-     * Abre el modal para editar el PIN de seguridad del locker.
-     */
-    const abrirEditarPin = useCallback(() => {
-        setNuevoPin(devicePin || "2415")
-        setModalPinVisible(true)
-    }, [devicePin])
+  /**
+   * Solicita confirmación al usuario para desvincular el Pocket Locker actual
+   * y purga las credenciales guardadas en SecureStore.
+   */
+  const handleDesvincular = useCallback(() => {
+    Alert.alert(
+      'Desvincular dispositivo',
+      '¿Estás seguro de que deseas eliminar la vinculación con este Pocket Locker? Se borrará la configuración y el PIN seguro guardado en este teléfono.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Desvincular',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await desvincularDispositivo();
+              Alert.alert('Desvinculado', 'El dispositivo ha sido desvinculado con éxito.');
+              router.replace('/(tabs)');
+            } catch {
+              Alert.alert('Error', 'No se pudo desvincular el dispositivo.');
+            }
+          },
+        },
+      ]
+    );
+  }, [desvincularDispositivo]);
 
-    /**
-     * Guarda el nuevo PIN de seguridad verificado.
-     */
-    const confirmarCambiarPin = useCallback(async () => {
-        const pinLimpio = nuevoPin.trim()
-        if (!pinLimpio) {
-            Alert.alert("PIN inválido", "El PIN de seguridad no puede estar vacío")
-            return
-        }
-        setGuardandoPin(true)
-        try {
-            await actualizarPinDispositivo(pinLimpio)
-            setModalPinVisible(false)
-            Alert.alert("PIN Actualizado", "La clave de seguridad para el Pocket Locker ha sido guardada.")
-        } catch {
-            Alert.alert("Error", "No se pudo actualizar el PIN de seguridad")
-        } finally {
-            setGuardandoPin(false)
-        }
-    }, [nuevoPin, actualizarPinDispositivo])
+  /** Abre el modal para modificar el nombre del dispositivo */
+  const abrirRenombrar = useCallback(() => {
+    setNuevoNombreDispositivo(deviceName || 'Pocket Locker');
+    setModalRenombrarVisible(true);
+  }, [deviceName]);
 
-    /**
-     * Solicita confirmación y desvincula el locker de la memoria de la aplicación.
-     */
-    const handleDesvincular = useCallback(() => {
+  /** Guarda el nuevo nombre asignado al dispositivo en el almacenamiento local */
+  const guardarNuevoNombreDispositivo = useCallback(async () => {
+    const nombre = nuevoNombreDispositivo.trim();
+    if (!nombre) {
+      Alert.alert('Nombre requerido', 'El nombre del dispositivo no puede estar vacío.');
+      return;
+    }
+    setGuardandoNombreDispositivo(true);
+    try {
+      await renombrarDispositivo(nombre);
+      setModalRenombrarVisible(false);
+      Alert.alert('Actualizado', 'Nombre del dispositivo actualizado con éxito.');
+    } catch {
+      Alert.alert('Error', 'No se pudo actualizar el nombre.');
+    } finally {
+      setGuardandoNombreDispositivo(false);
+    }
+  }, [nuevoNombreDispositivo, renombrarDispositivo]);
+
+  /** Abre el modal para modificar el nombre del usuario */
+  const abrirEditarNombre = useCallback(() => {
+    setNuevoNombreUsuario(userName || '');
+    setModalEditarNombreUsuario(true);
+  }, [userName]);
+
+  /** Guarda el nuevo nombre de usuario en el contexto y almacenamiento */
+  const guardarNuevoNombreUsuario = useCallback(async () => {
+    const nombre = nuevoNombreUsuario.trim();
+    if (!nombre) {
+      Alert.alert('Nombre requerido', 'Tu nombre no puede estar vacío.');
+      return;
+    }
+    setGuardandoNombreUsuario(true);
+    try {
+      await guardarNombreUsuario(nombre);
+      setModalEditarNombreUsuario(false);
+      Alert.alert('Actualizado', 'Tu nombre de usuario se ha guardado.');
+    } catch {
+      Alert.alert('Error', 'No se pudo guardar el nombre.');
+    } finally {
+      setGuardandoNombreUsuario(false);
+    }
+  }, [nuevoNombreUsuario, guardarNombreUsuario]);
+
+  /**
+   * Solicita autenticación biométrica (huella dactilar) antes de permitir visualizar
+   * y editar el PIN de seguridad del dispositivo. Accesible para cualquier usuario normal o administrador.
+   */
+  const abrirEditarPin = useCallback(async () => {
+    const auth = await BiometricService.autenticarParaEditarPin();
+    if (!auth.exito) {
+      if (auth.requiereBuild) {
         Alert.alert(
-            "Desvincular dispositivo",
-            "¿Estás seguro de que quieres eliminar este Pocket Locker? Se borrará de la memoria de la aplicación.",
-            [
-                { text: "Cancelar", style: "cancel" },
-                {
-                    text: "Eliminar",
-                    style: "destructive",
-                    onPress: async () => {
-                        try {
-                            await desvincularDispositivo()
-                            Alert.alert("Eliminado", "El dispositivo ha sido desvinculado con éxito")
-                        } catch {
-                            Alert.alert("Error", "No se pudo desvincular el dispositivo")
-                        }
-                    },
-                },
-            ]
-        )
-    }, [desvincularDispositivo])
+          'Biometría no disponible en esta versión',
+          'El lector de huella dactilar se habilitará al compilar una nueva versión instalable (EAS Build). ¿Deseas acceder a editar el PIN ahora?',
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            {
+              text: 'Editar PIN',
+              onPress: () => {
+                setNuevoPin(devicePin || '2415');
+                setModalPinVisible(true);
+              },
+            },
+          ]
+        );
+        return;
+      }
+      if (!auth.cancelado && auth.mensajeError) {
+        Alert.alert('Autenticación biométrica requerida', auth.mensajeError);
+      }
+      return;
+    }
 
-    return (
-        <SafeAreaView style={styles.container} edges={["top"]}>
-            {modoSimulacion && (
-                <View style={styles.bannerSimulacion}>
-                    <Text style={styles.bannerSimulacionTexto}>Modo Simulación Activo</Text>
-                </View>
-            )}
-            <View style={styles.content}>
-                <Text style={styles.header}>Ajustes</Text>
-                <Text style={styles.helper}>Configura y gestiona tu aplicación Pocket Locker.</Text>
+    setNuevoPin(devicePin || '2415');
+    setModalPinVisible(true);
+  }, [devicePin]);
 
-                <View style={styles.seccion}>
-                    <Text style={styles.seccionTitulo}>Dispositivo Vinculado</Text>
-                    {deviceMac ? (
-                        <View style={styles.tarjetaDispositivo}>
-                            <View style={styles.infoRow}>
-                                <MaterialIcons name="lock" size={24} color={Colors.azulPrimario} />
-                                <View style={styles.infoTextContainer}>
-                                    <Text style={styles.deviceLabel}>Nombre</Text>
-                                    <Text style={styles.deviceName}>{deviceName}</Text>
-                                </View>
-                                <TouchableOpacity style={styles.btnEditar} onPress={abrirRenombrar} activeOpacity={0.7}>
-                                    <MaterialIcons name="edit" size={20} color={Colors.azulPrimario} />
-                                </TouchableOpacity>
-                            </View>
+  /** Valida y persiste el nuevo PIN de seguridad cifrado en SecureStore */
+  const guardarNuevoPin = useCallback(async () => {
+    const pinLimpio = nuevoPin.trim().toUpperCase();
+    if (!pinLimpio) {
+      Alert.alert('PIN requerido', 'Introduce el nuevo PIN de seguridad.');
+      return;
+    }
 
-                            <View style={styles.divisor} />
+    const val = parsearYValidarPin(pinLimpio);
+    if (!val.esValido) {
+      Alert.alert('PIN inválido', val.mensajeError || 'El formato del PIN no es válido.');
+      return;
+    }
 
-                            <View style={styles.infoRow}>
-                                <MaterialIcons name="fingerprint" size={24} color="#8A8A8A" />
-                                <View style={styles.infoTextContainer}>
-                                    <Text style={styles.deviceLabel}>Dirección MAC</Text>
-                                    <Text style={styles.deviceMac}>{deviceMac}</Text>
-                                </View>
-                            </View>
+    setGuardandoPin(true);
+    try {
+      await actualizarPinDispositivo(pinLimpio);
+      setModalPinVisible(false);
+      Alert.alert('PIN actualizado', 'El nuevo PIN se ha guardado de forma segura.');
+    } catch {
+      Alert.alert('Error', 'No se pudo guardar el nuevo PIN.');
+    } finally {
+      setGuardandoPin(false);
+    }
+  }, [nuevoPin, actualizarPinDispositivo]);
 
-                            <View style={styles.divisor} />
+  /** Inicia la sincronización de reloj en tiempo real y permisos con el microcontrolador ESP32 */
+  const handleSincronizar = useCallback(async () => {
+    setSincronizando(true);
+    try {
+      await sincronizarConLocker();
+      Alert.alert('Sincronización completada', 'Se han actualizado los datos con el Pocket Locker.');
+    } catch {
+      Alert.alert(
+        'Aviso de sincronización',
+        'No se pudo comunicar con el locker. Asegúrate de estar cerca y conectado.'
+      );
+    } finally {
+      setSincronizando(false);
+    }
+  }, [sincronizarConLocker]);
 
-                            <View style={styles.infoRow}>
-                                <MaterialIcons name="vpn-key" size={24} color={Colors.azulPrimario} />
-                                <View style={styles.infoTextContainer}>
-                                    <Text style={styles.deviceLabel}>PIN de Seguridad</Text>
-                                    <Text style={styles.devicePin}>•••••• ({devicePin || "2415"})</Text>
-                                </View>
-                                <TouchableOpacity style={styles.btnEditar} onPress={abrirEditarPin} activeOpacity={0.7}>
-                                    <MaterialIcons name="edit" size={20} color={Colors.azulPrimario} />
-                                </TouchableOpacity>
-                            </View>
+  return (
+    <SafeAreaView style={tw`flex-1 bg-beige-bg`} edges={['top']}>
+      <ScrollView contentContainerStyle={tw`p-5 pb-10 flex-grow`}>
+        {/* Título de la pantalla */}
+        <Text style={tw`text-2xl font-bold text-azul-oscuro mb-1`}>Ajustes</Text>
+        <Text style={tw`text-sm text-texto-secundario mb-6`}>
+          Configura tus preferencias, dispositivo y credenciales
+        </Text>
 
-                            <TouchableOpacity
-                                style={styles.btnEliminar}
-                                onPress={handleDesvincular}
-                                activeOpacity={0.8}
-                            >
-                                <MaterialIcons name="link-off" size={20} color={Colors.errorRojo} />
-                                <Text style={styles.btnEliminarTexto}>Eliminar dispositivo</Text>
-                            </TouchableOpacity>
-                        </View>
-                    ) : (
-                        <View style={styles.tarjetaVacia}>
-                            <MaterialIcons name="portable-wifi-off" size={32} color="#A2A2A2" />
-                            <Text style={styles.tarjetaVaciaTexto}>
-                                No hay ningún Pocket Locker vinculado actualmente
-                            </Text>
-                        </View>
-                    )}
-                </View>
+        {/* Sección: Usuario */}
+        <Text style={tw`text-xs font-bold text-texto-secundario uppercase tracking-wider mb-2 ml-1`}>
+          Usuario
+        </Text>
+        <UsuarioCard
+          userName={userName}
+          userRole={userRole}
+          onEditarNombre={abrirEditarNombre}
+          onIrAdmin={() => router.push('/admin')}
+        />
 
-                <View style={styles.seccion}>
-                    <Text style={styles.seccionTitulo}>Desarrollo y Pruebas</Text>
-                    <View style={styles.tarjetaAjustes}>
-                        <View style={styles.ajusteRow}>
-                            <View style={styles.ajusteTexto}>
-                                <Text style={styles.ajusteLabel}>Modo Demostración</Text>
-                                <Text style={styles.ajusteDesc}>Simula la búsqueda y conexión sin hardware real</Text>
-                            </View>
-                            <Switch
-                                value={modoSimulacion}
-                                onValueChange={setModoSimulacion}
-                                trackColor={{ false: "#D2CFC7", true: "#C5D6C5" }}
-                                thumbColor={modoSimulacion ? Colors.exitoVerde : "#F4F3F0"}
-                            />
-                        </View>
+        {/* Sección: Dispositivo Vinculado */}
+        <Text style={tw`text-xs font-bold text-texto-secundario uppercase tracking-wider mb-2 ml-1`}>
+          Dispositivo Vinculado
+        </Text>
+        <DispositivoCard
+          deviceMac={deviceMac}
+          deviceName={deviceName}
+          devicePin={devicePin}
+          onRenombrar={abrirRenombrar}
+          onEditarPin={abrirEditarPin}
+          onDesvincular={handleDesvincular}
+        />
 
-                        <View style={styles.divisor} />
+        {/* Sección: Preferencias y Diagnóstico */}
+        <Text style={tw`text-xs font-bold text-texto-secundario uppercase tracking-wider mb-2 ml-1`}>
+          Preferencias
+        </Text>
+        <PreferenciasCard
+          sincronizando={sincronizando}
+          onSincronizar={handleSincronizar}
+          onIrLogs={() => router.push('/logs')}
+        />
 
-                        <TouchableOpacity
-                            style={styles.ajusteBotonRow}
-                            onPress={() => router.push("/logs")}
-                            activeOpacity={0.7}
-                        >
-                            <View style={styles.ajusteTexto}>
-                                <Text style={styles.ajusteLabel}>Ver Logs de Bluetooth</Text>
-                                <Text style={styles.ajusteDesc}>Depuración detallada del tráfico serie/BLE</Text>
-                            </View>
-                            <MaterialIcons name="chevron-right" size={24} color={Colors.textoSecundario} />
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </View>
+        {/* Info de la aplicación */}
+        <AppInfoCard />
+      </ScrollView>
 
-            {/* Modal para Renombrar Dispositivo */}
-            <Modal
-                animationType="fade"
-                transparent={true}
-                visible={modalRenombrarVisible}
-                onRequestClose={() => setModalRenombrarVisible(false)}
-            >
-                <View style={styles.modalOverlay}>
-                    <KeyboardAvoidingView
-                        behavior={Platform.OS === "ios" ? "padding" : "height"}
-                        style={styles.modalContent}
-                    >
-                        <Text style={styles.modalTitle}>Renombrar dispositivo</Text>
-                        <Text style={styles.modalSubtitle}>Escribe el nuevo nombre para tu Pocket Locker:</Text>
+      {/* Modales modulares */}
+      <ModalRenombrar
+        visible={modalRenombrarVisible}
+        titulo="Renombrar Dispositivo"
+        subtitulo="Introduce un nombre descriptivo para identificar tu Pocket Locker:"
+        label="Nombre del dispositivo"
+        valor={nuevoNombreDispositivo}
+        setValor={setNuevoNombreDispositivo}
+        guardando={guardandoNombreDispositivo}
+        onCancel={() => setModalRenombrarVisible(false)}
+        onConfirm={guardarNuevoNombreDispositivo}
+      />
 
-                        <TextInput
-                            style={styles.modalInput}
-                            value={nuevoNombre}
-                            onChangeText={setNuevoNombre}
-                            placeholder="Nombre del Locker"
-                            placeholderTextColor="#999"
-                            autoFocus
-                            maxLength={24}
-                        />
+      <ModalRenombrar
+        visible={modalEditarNombreUsuario}
+        titulo="Modificar Tu Nombre"
+        subtitulo="Este nombre se enviará al Pocket Locker al sincronizar para registrar tus aperturas:"
+        label="Nombre de usuario"
+        valor={nuevoNombreUsuario}
+        setValor={setNuevoNombreUsuario}
+        guardando={guardandoNombreUsuario}
+        onCancel={() => setModalEditarNombreUsuario(false)}
+        onConfirm={guardarNuevoNombreUsuario}
+      />
 
-                        <View style={styles.modalButtons}>
-                            <TouchableOpacity
-                                style={[styles.modalButton, styles.modalButtonCancel]}
-                                onPress={() => setModalRenombrarVisible(false)}
-                                disabled={guardandoNombre}
-                            >
-                                <Text style={styles.modalButtonCancelText}>Cancelar</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                style={[styles.modalButton, styles.modalButtonConfirm]}
-                                onPress={confirmarRenombrar}
-                                disabled={guardandoNombre}
-                            >
-                                {guardandoNombre ? (
-                                    <ActivityIndicator color="#FFFFFF" size="small" />
-                                ) : (
-                                    <Text style={styles.modalButtonConfirmText}>Guardar</Text>
-                                )}
-                            </TouchableOpacity>
-                        </View>
-                    </KeyboardAvoidingView>
-                </View>
-            </Modal>
-
-            {/* Modal para Cambiar PIN de Seguridad */}
-            <Modal
-                animationType="fade"
-                transparent={true}
-                visible={modalPinVisible}
-                onRequestClose={() => setModalPinVisible(false)}
-            >
-                <View style={styles.modalOverlay}>
-                    <KeyboardAvoidingView
-                        behavior={Platform.OS === "ios" ? "padding" : "height"}
-                        style={styles.modalContent}
-                    >
-                        <Text style={styles.modalTitle}>PIN de Seguridad</Text>
-                        <Text style={styles.modalSubtitle}>
-                            Introduce el PIN o clave de seguridad configurado en el firmware del ESP32:
-                        </Text>
-
-                        <TextInput
-                            style={styles.modalInput}
-                            value={nuevoPin}
-                            onChangeText={setNuevoPin}
-                            placeholder="PIN de seguridad (ej. 2415)"
-                            placeholderTextColor="#999"
-                            autoFocus
-                            keyboardType="numeric"
-                            maxLength={16}
-                        />
-
-                        <View style={styles.modalButtons}>
-                            <TouchableOpacity
-                                style={[styles.modalButton, styles.modalButtonCancel]}
-                                onPress={() => setModalPinVisible(false)}
-                                disabled={guardandoPin}
-                            >
-                                <Text style={styles.modalButtonCancelText}>Cancelar</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                style={[styles.modalButton, styles.modalButtonConfirm]}
-                                onPress={confirmarCambiarPin}
-                                disabled={guardandoPin}
-                            >
-                                {guardandoPin ? (
-                                    <ActivityIndicator color="#FFFFFF" size="small" />
-                                ) : (
-                                    <Text style={styles.modalButtonConfirmText}>Guardar</Text>
-                                )}
-                            </TouchableOpacity>
-                        </View>
-                    </KeyboardAvoidingView>
-                </View>
-            </Modal>
-        </SafeAreaView>
-    )
+      <ModalEditarPin
+        visible={modalPinVisible}
+        pin={nuevoPin}
+        setPin={setNuevoPin}
+        guardando={guardandoPin}
+        onCancel={() => setModalPinVisible(false)}
+        onConfirm={guardarNuevoPin}
+      />
+    </SafeAreaView>
+  );
 }
-
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: Colors.beigeBg,
-    },
-    content: {
-        flex: 1,
-        paddingHorizontal: 20,
-        paddingTop: 16,
-    },
-    header: {
-        color: Colors.azulOscuro,
-        fontSize: 22,
-        fontWeight: "bold",
-    },
-    helper: {
-        color: Colors.textoSecundario,
-        fontSize: 14,
-        marginTop: 4,
-        marginBottom: 24,
-    },
-    seccion: {
-        marginBottom: 28,
-    },
-    seccionTitulo: {
-        fontSize: 14,
-        fontWeight: "bold",
-        color: Colors.textoSecundario,
-        marginBottom: 10,
-        textTransform: "uppercase",
-        letterSpacing: 1,
-    },
-    tarjetaDispositivo: {
-        backgroundColor: Colors.beigeCard,
-        borderRadius: 12,
-        padding: 16,
-        shadowColor: "#000",
-        shadowOpacity: 0.03,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
-        elevation: 1,
-    },
-    tarjetaVacia: {
-        backgroundColor: Colors.beigeCard,
-        borderRadius: 12,
-        padding: 24,
-        alignItems: "center",
-        justifyContent: "center",
-        borderWidth: 1,
-        borderStyle: "dashed",
-        borderColor: "#D2CFC7",
-    },
-    tarjetaVaciaTexto: {
-        color: Colors.textoSecundario,
-        fontSize: 14,
-        textAlign: "center",
-        marginTop: 12,
-        lineHeight: 20,
-    },
-    infoRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        paddingVertical: 8,
-    },
-    infoTextContainer: {
-        flex: 1,
-        marginLeft: 12,
-    },
-    deviceLabel: {
-        fontSize: 11,
-        color: Colors.textoSecundario,
-        fontWeight: "600",
-        textTransform: "uppercase",
-    },
-    deviceName: {
-        fontSize: 16,
-        fontWeight: "bold",
-        color: Colors.azulOscuro,
-        marginTop: 2,
-    },
-    deviceMac: {
-        fontSize: 15,
-        fontWeight: "500",
-        color: Colors.azulOscuro,
-        marginTop: 2,
-    },
-    devicePin: {
-        fontSize: 15,
-        fontWeight: "600",
-        color: Colors.azulPrimario,
-        marginTop: 2,
-    },
-    btnEditar: {
-        padding: 8,
-    },
-    divisor: {
-        height: 1,
-        backgroundColor: "rgba(0,0,0,0.05)",
-        marginVertical: 10,
-    },
-    btnEliminar: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "#FCE8E6",
-        borderRadius: 8,
-        paddingVertical: 12,
-        marginTop: 18,
-        gap: 8,
-    },
-    btnEliminarTexto: {
-        color: Colors.errorRojo,
-        fontSize: 14,
-        fontWeight: "700",
-    },
-    tarjetaAjustes: {
-        backgroundColor: Colors.beigeCard,
-        borderRadius: 12,
-        paddingHorizontal: 16,
-        shadowColor: "#000",
-        shadowOpacity: 0.03,
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
-        elevation: 1,
-    },
-    ajusteRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        paddingVertical: 14,
-    },
-    ajusteBotonRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        paddingVertical: 14,
-    },
-    ajusteTexto: {
-        flex: 1,
-        marginRight: 16,
-    },
-    ajusteLabel: {
-        fontSize: 15,
-        fontWeight: "bold",
-        color: Colors.azulOscuro,
-    },
-    ajusteDesc: {
-        fontSize: 12,
-        color: Colors.textoSecundario,
-        marginTop: 2,
-        lineHeight: 16,
-    },
-    bannerSimulacion: {
-        backgroundColor: "#FFE0B2",
-        paddingVertical: 8,
-        alignItems: "center",
-        justifyContent: "center",
-        width: "100%",
-    },
-    bannerSimulacionTexto: {
-        color: "#E65100",
-        fontSize: 12,
-        fontWeight: "bold",
-    },
-    // Modal styles
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: "rgba(0,0,0,0.5)",
-        justifyContent: "center",
-        alignItems: "center",
-        padding: 24,
-    },
-    modalContent: {
-        backgroundColor: Colors.beigeCard,
-        borderRadius: 16,
-        padding: 24,
-        width: "100%",
-        maxWidth: 340,
-        alignItems: "stretch",
-        shadowColor: "#000",
-        shadowOpacity: 0.15,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 6 },
-        elevation: 5,
-    },
-    modalTitle: {
-        fontSize: 18,
-        fontWeight: "bold",
-        color: Colors.azulOscuro,
-        marginBottom: 10,
-    },
-    modalSubtitle: {
-        fontSize: 13,
-        color: Colors.textoSecundario,
-        marginBottom: 16,
-        lineHeight: 18,
-    },
-    modalInput: {
-        borderWidth: 1,
-        borderColor: "#D2CFC7",
-        borderRadius: 8,
-        paddingVertical: 10,
-        paddingHorizontal: 12,
-        fontSize: 15,
-        color: Colors.azulOscuro,
-        backgroundColor: "#FAF9F6",
-        marginBottom: 20,
-    },
-    modalButtons: {
-        flexDirection: "row",
-        justifyContent: "flex-end",
-        gap: 12,
-    },
-    modalButton: {
-        paddingVertical: 10,
-        paddingHorizontal: 16,
-        borderRadius: 8,
-        alignItems: "center",
-        justifyContent: "center",
-    },
-    modalButtonCancel: {
-        backgroundColor: "rgba(0,0,0,0.05)",
-    },
-    modalButtonCancelText: {
-        color: Colors.textoSecundario,
-        fontSize: 14,
-        fontWeight: "600",
-    },
-    modalButtonConfirm: {
-        backgroundColor: Colors.azulPrimario,
-        minWidth: 80,
-    },
-    modalButtonConfirmText: {
-        color: "#FFFFFF",
-        fontSize: 14,
-        fontWeight: "600",
-    },
-})

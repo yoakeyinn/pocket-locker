@@ -2,7 +2,13 @@
   "expo": {
     "name": "Pocket Locker",
     "slug": "pocket-locker",
-    "version": "1.1.1",
+    "version": "1.1.2",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/30c00fa6-7d04-44dd-8f0a-99a5bbf25f72"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "userInterfaceStyle": "light",
@@ -24,7 +30,8 @@
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.BLUETOOTH_ADVERTISE"
+        "android.permission.BLUETOOTH_ADVERTISE",
+        "android.permission.USE_BIOMETRIC"
       ]
     },
     "ios": {
@@ -42,7 +49,13 @@
       ],
       "expo-font",
       "react-native-ble-plx",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Permite autenticar con biometría para ver y modificar el PIN de seguridad"
+        }
+      ]
     ],
     "extra": {
       "router": {},

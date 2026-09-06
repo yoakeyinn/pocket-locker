@@ -1,6 +1,7 @@
 import RNBluetoothClassic, { BluetoothDevice } from "react-native-bluetooth-classic"
 import { BleManager, Device } from "react-native-ble-plx"
-import { PermissionsAndroid, Platform, NativeModules } from "react-native"
+import { PermissionsAndroid, Platform, NativeModules, Linking } from "react-native"
+import LogService from "./LogService"
 
 /**
  * Representación unificada de un dispositivo Bluetooth detectado (Clásico o BLE).
@@ -41,17 +42,27 @@ class BluetoothServiceClass {
 
     /**
      * Registra una función de retorno (callback) que se invocará cuando el dispositivo
-     * conectado se desconecte de forma inesperada.
+     * conectado se desconecte de forma inesperada. Retorna función de desuscripción.
      */
-    registrarOnDesconexion(callback: () => void) {
+    registrarOnDesconexion(callback: () => void): () => void {
         this.onDesconexionCallback = callback
+        return () => {
+            if (this.onDesconexionCallback === callback) {
+                this.onDesconexionCallback = null
+            }
+        }
     }
 
     /**
-     * Registra un callback para recibir telemetría y respuestas estructuradas del locker.
+     * Registra un callback para recibir telemetría y respuestas estructuradas del locker. Retorna función de desuscripción.
      */
-    registrarOnDatosRecibidos(callback: (data: string) => void) {
+    registrarOnDatosRecibidos(callback: (data: string) => void): () => void {
         this.onDatosRecibidosCallback = callback
+        return () => {
+            if (this.onDatosRecibidosCallback === callback) {
+                this.onDatosRecibidosCallback = null
+            }
+        }
     }
 
     /**
@@ -80,7 +91,7 @@ class BluetoothServiceClass {
         if (!manager) return
 
         this.disconnectSubscription = manager.onDeviceDisconnected(device.id, (error, disconnectedDevice) => {
-            console.log("[BLE] Dispositivo desconectado activamente:", disconnectedDevice?.id)
+            LogService.info(`[BLE] Dispositivo desconectado activamente: ${disconnectedDevice?.id || ""}`)
             if (this.onDesconexionCallback) {
                 this.onDesconexionCallback()
             }
@@ -104,14 +115,14 @@ class BluetoothServiceClass {
         if (device && typeof (device as any).onDisconnected === "function") {
             try {
                 this.classicDisconnectSubscription = (device as any).onDisconnected(() => {
-                    console.log("[Classic] Dispositivo desconectado físicamente:", address)
+                    LogService.info(`[Classic] Dispositivo desconectado físicamente: ${address}`)
                     if (this.onDesconexionCallback) {
                         this.onDesconexionCallback()
                     }
                     this.dispositivoConectadoClassic = null
                 })
             } catch (e) {
-                console.warn("Error al registrar listener de desconexión en device Classic", e)
+                LogService.warn("Error al registrar listener de desconexión en device Classic", e)
             }
         } else if (
             this.esClassicDisponible() &&
@@ -121,7 +132,7 @@ class BluetoothServiceClass {
                 this.classicDisconnectSubscription = (RNBluetoothClassic as any).onDeviceDisconnected(
                     (event: { address?: string }) => {
                         if (event && event.address && event.address.toLowerCase() === address.toLowerCase()) {
-                            console.log("[Classic] Evento nativo de desconexión recibido para:", event.address)
+                            LogService.info(`[Classic] Evento nativo de desconexión recibido para: ${event.address}`)
                             if (this.onDesconexionCallback) {
                                 this.onDesconexionCallback()
                             }
@@ -130,7 +141,7 @@ class BluetoothServiceClass {
                     }
                 )
             } catch (e) {
-                console.warn("Error registrando listener global de desconexión Classic", e)
+                LogService.warn("Error registrando listener global de desconexión Classic", e)
             }
         }
 
@@ -152,7 +163,7 @@ class BluetoothServiceClass {
                     }
                 })
             } catch (e) {
-                console.warn("Error al registrar listener de datos en device Classic", e)
+                LogService.warn("Error al registrar listener de datos en device Classic", e)
             }
         } else if (this.esClassicDisponible() && typeof (RNBluetoothClassic as any).onDeviceRead === "function") {
             try {
@@ -165,7 +176,7 @@ class BluetoothServiceClass {
                     }
                 )
             } catch (e) {
-                console.warn("Error al registrar onDeviceRead global", e)
+                LogService.warn("Error al registrar onDeviceRead global", e)
             }
         }
     }
@@ -181,13 +192,14 @@ class BluetoothServiceClass {
             }
             return this.bleManager
         } catch (e) {
-            console.warn("[BLE] El módulo react-native-ble-plx no está disponible en este entorno", e)
+            LogService.warn("[BLE] El módulo react-native-ble-plx no está disponible en este entorno", e)
             return null
         }
     }
 
     /**
      * Solicita al usuario los permisos de sistema requeridos en Android (incluyendo Android 12+ API 31+).
+     * Comprueba previamente si ya han sido concedidos para no interrumpir el flujo ni abrir diálogos redundantes.
      */
     async solicitarPermisos(): Promise<boolean> {
         if (Platform.OS !== "android") return true
@@ -197,6 +209,13 @@ class BluetoothServiceClass {
                 typeof Platform.Version === "number" ? Platform.Version : parseInt(String(Platform.Version), 10)
 
             if (apiLevel >= 31) {
+                // Verificar primero si ya están otorgados para evitar saltos de pantalla o re-peticiones
+                const hasScan = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN)
+                const hasConnect = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT)
+                if (hasScan && hasConnect) {
+                    return true
+                }
+
                 // Android 12+ requiere BLUETOOTH_SCAN y BLUETOOTH_CONNECT en tiempo de ejecución
                 const granted = await PermissionsAndroid.requestMultiple([
                     PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
@@ -209,12 +228,17 @@ class BluetoothServiceClass {
                     granted["android.permission.BLUETOOTH_CONNECT"] === PermissionsAndroid.RESULTS.GRANTED
                 )
             } else {
-                // Versiones anteriores a Android 12 requieren ACCESS_FINE_LOCATION para escanear
+                // Versiones anteriores a Android 12: verificar primero ACCESS_FINE_LOCATION
+                const hasLocation = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION)
+                if (hasLocation) {
+                    return true
+                }
+
                 const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION)
                 return granted === PermissionsAndroid.RESULTS.GRANTED
             }
         } catch (e) {
-            console.warn("Error solicitando permisos Bluetooth en el dispositivo", e)
+            LogService.warn("Error solicitando permisos Bluetooth en el dispositivo", e)
             return false
         }
     }
@@ -240,156 +264,304 @@ class BluetoothServiceClass {
      * Comprueba si el adaptador Bluetooth del teléfono está actualmente encendido.
      */
     async estaEncendido(): Promise<boolean> {
-        if (this.esClassicDisponible()) {
-            try {
-                const activeClassic = await RNBluetoothClassic.isBluetoothEnabled()
-                if (activeClassic) return true
-            } catch (e) {
-                // Continuar con verificación BLE
+        try {
+            if (this.esClassicDisponible()) {
+                try {
+                    const activeClassic = await RNBluetoothClassic.isBluetoothEnabled()
+                    if (activeClassic) return true
+                } catch (e) {
+                    // Continuar con verificación BLE
+                }
             }
-        }
 
-        const manager = this.getBleManager()
-        if (manager) {
-            try {
-                const state = await manager.state()
-                return state === "PoweredOn"
-            } catch (e) {
-                return false
+            const manager = this.getBleManager()
+            if (manager) {
+                try {
+                    const state = await manager.state()
+                    return state === "PoweredOn"
+                } catch (e) {
+                    return false
+                }
             }
+            return false
+        } catch (e) {
+            LogService.warn("Error comprobando si Bluetooth está encendido:", e)
+            return false
         }
-
-        return false
     }
 
     /**
      * Solicita al sistema operativo habilitar el adaptador Bluetooth si está apagado.
+     * Si ya está encendido, retorna inmediatamente true sin diálogos del sistema.
+     * Espera a que el adaptador complete la transición a encendido (STATE_ON).
      */
     async pedirActivar(): Promise<boolean> {
-        if (this.esClassicDisponible()) {
-            try {
-                return await RNBluetoothClassic.requestBluetoothEnabled()
-            } catch (e) {
+        try {
+            const yaActivo = await this.estaEncendido()
+            if (yaActivo) return true
+
+            await this.solicitarPermisos()
+            if (this.esClassicDisponible()) {
+                const requested = await RNBluetoothClassic.requestBluetoothEnabled()
+                if (requested) {
+                    // Esperar activamente a que el adaptador complete la transición a encendido
+                    for (let i = 0; i < 10; i++) {
+                        await new Promise((r) => setTimeout(r, 250))
+                        const yaEncendido = await this.estaEncendido()
+                        if (yaEncendido) return true
+                    }
+                    return true
+                }
                 return false
             }
+            return false
+        } catch (e) {
+            LogService.warn("Error al solicitar activar Bluetooth:", e)
+            return false
         }
-        return false
     }
 
     /**
-     * Realiza un escaneo exhaustivo unificado descubriendo:
-     * 1. Dispositivos clásicos emparejados (Android bonded devices).
-     * 2. Nuevos dispositivos clásicos en rango de descubrimiento.
-     * 3. Dispositivos BLE anunciándose en las inmediaciones.
+     * Vincula activamente un dispositivo Bluetooth desde la aplicación,
+     * se haya emparejado previamente en los ajustes del sistema o no.
      */
-    async listarDispositivos(): Promise<DispositivoBT[]> {
+    async vincularDispositivo(address: string): Promise<boolean> {
+        if (!this.esClassicDisponible()) return false
+        try {
+            await this.cancelarDescubrimiento()
+            await new Promise((r) => setTimeout(r, 200))
+
+            // Verificar si ya está emparejado en el sistema operativo Android
+            try {
+                const emparejados = await RNBluetoothClassic.getBondedDevices()
+                if (
+                    Array.isArray(emparejados) &&
+                    emparejados.some((d: any) => d && d.address && d.address.toLowerCase() === address.toLowerCase())
+                ) {
+                    LogService.info(`[Classic] El dispositivo ${address} ya está emparejado en el sistema`)
+                    return true
+                }
+            } catch (eBond) {
+                LogService.warn("[Classic] Aviso al consultar dispositivos emparejados:", eBond)
+            }
+
+            LogService.info(`[Classic] Vinculando dispositivo desde la app: ${address}`)
+            const pairPromise = RNBluetoothClassic.pairDevice(address)
+            const timeoutPromise = new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error("Tiempo de espera agotado al emparejar")), 4000)
+            )
+            await Promise.race([pairPromise, timeoutPromise])
+            LogService.info(`[Classic] Dispositivo vinculado con éxito: ${address}`)
+            return true
+        } catch (e) {
+            LogService.warn(`[Classic] Aviso al vincular ${address} (continuando flujo):`, e)
+            return false
+        }
+    }
+
+    /**
+     * Descubre activamente los dispositivos Bluetooth que se encuentran actualmente accesibles en el entorno de radio.
+     * Solo retorna dispositivos detectados en tiempo real (o actualmente conectados al teléfono).
+     * No incluye dispositivos guardados/emparejados en el historial del teléfono que estén fuera de alcance.
+     *
+     * @param onDispositivoEncontrado Callback opcional para emitir dispositivos reactivamente en cuanto son detectados
+     * @param duracionMs Duración del escaneo activo (por defecto 6000ms para una detección rápida y confiable)
+     */
+    async listarDispositivos(
+        onDispositivoEncontrado?: (dispositivo: DispositivoBT) => void,
+        duracionMs: number = 6000
+    ): Promise<DispositivoBT[]> {
         const okPermisos = await this.solicitarPermisos()
         if (!okPermisos) {
             throw new Error("Permisos de Bluetooth no concedidos")
         }
 
-        // Cancelar cualquier escaneo previo para evitar colisiones y fugas de recursos
+        // Cancelar escaneos residuales previos y esperar estabilización del chip
         await this.cancelarDescubrimiento()
+        await new Promise((r) => setTimeout(r, 300))
 
-        const mapa = new Map<string, DispositivoBT>()
+        const mapaDispositivos = new Map<string, DispositivoBT>()
 
-        // 1. Obtener dispositivos emparejados previamente en el sistema (Classic)
-        if (this.esClassicDisponible()) {
-            try {
-                const emparejados = await RNBluetoothClassic.getBondedDevices()
-                emparejados.forEach((d) => {
-                    mapa.set(d.address.toLowerCase(), {
-                        name: d.name || "Sin nombre",
-                        address: d.address,
-                        type: "classic",
-                    })
-                })
-            } catch (e) {
-                console.warn("Error obteniendo dispositivos emparejados clásicos", e)
+        const emitirOActualizar = (dev: DispositivoBT) => {
+            const addr = dev.address.toLowerCase()
+            const prev = mapaDispositivos.get(addr)
+            if (prev) {
+                if (
+                    (!prev.name || prev.name === "Sin nombre" || prev.name.startsWith("Desconocido")) &&
+                    dev.name &&
+                    dev.name !== "Sin nombre"
+                ) {
+                    prev.name = dev.name
+                    onDispositivoEncontrado?.(prev)
+                }
+                return
             }
+            mapaDispositivos.set(addr, dev)
+            onDispositivoEncontrado?.(dev)
         }
 
-        // 2. Ejecutar escaneos de descubrimiento en paralelo
-        const promesas: Promise<void>[] = []
-
-        // Descubrimiento de Bluetooth Clásico (Android)
+        // 1. Si hay algún dispositivo Bluetooth actualmente conectado al teléfono, añadirlo (está al alcance físico)
         if (this.esClassicDisponible()) {
-            promesas.push(
-                (async () => {
-                    try {
-                        const descubiertos = await RNBluetoothClassic.startDiscovery()
-                        descubiertos.forEach((d) => {
-                            const key = d.address.toLowerCase()
-                            if (!mapa.has(key)) {
-                                mapa.set(key, {
-                                    name: d.name || "Sin nombre",
-                                    address: d.address,
+            try {
+                const conectados = await RNBluetoothClassic.getConnectedDevices()
+                if (Array.isArray(conectados)) {
+                    for (const c of conectados) {
+                        if (c && c.address) {
+                            emitirOActualizar({
+                                name: c.name || "Sin nombre",
+                                address: c.address,
+                                type: "classic",
+                            })
+                        }
+                    }
+                }
+            } catch (e) {
+                LogService.warn("[Bluetooth] Error al consultar dispositivos conectados clásicos:", e)
+            }
+
+            // 1.5. Consultar dispositivos ya emparejados en el sistema (detección inmediata de PLBT)
+            try {
+                const emparejados = await RNBluetoothClassic.getBondedDevices()
+                if (Array.isArray(emparejados)) {
+                    for (const b of emparejados) {
+                        if (b && b.address) {
+                            const nameUpper = (b.name || "").toUpperCase()
+                            if (nameUpper.includes("PLBT") || nameUpper.includes("POCKET LOCKER") || nameUpper.includes("ESP32")) {
+                                emitirOActualizar({
+                                    name: b.name || "PLBT",
+                                    address: b.address,
                                     type: "classic",
                                 })
                             }
-                        })
-                    } catch (e) {
-                        console.warn("Error en discovery clásico", e)
+                        }
                     }
-                })()
-            )
+                }
+            } catch (e) {
+                LogService.warn("[Bluetooth] Error al consultar dispositivos emparejados clásicos:", e)
+            }
         }
 
-        // Escaneo de Bluetooth Low Energy (iOS y Android)
-        const manager = this.getBleManager()
-        if (manager) {
-            promesas.push(
-                new Promise<void>((resolve) => {
-                    const bleDiscovered = new Map<string, Device>()
+        // 2. Iniciar descubrimiento activo de Bluetooth Clásico (inquiry scan en tiempo real)
+        let subscripcionClassic: any = null
+        let classicPromise: Promise<any> = Promise.resolve([])
 
-                    manager.startDeviceScan(null, null, (error, device) => {
-                        if (error) {
-                            console.warn("Error en escaneo BLE", error)
-                            resolve()
-                            return
-                        }
-                        if (device) {
-                            const name = device.name || device.localName || "Dispositivo BLE"
-                            const key = device.id.toLowerCase()
-                            bleDiscovered.set(key, device)
+        if (this.esClassicDisponible()) {
+            try {
+                if (typeof (RNBluetoothClassic as any).onDeviceDiscovered === "function") {
+                    subscripcionClassic = (RNBluetoothClassic as any).onDeviceDiscovered((event: any) => {
+                        const dev = event?.device
+                        if (dev && dev.address) {
+                            emitirOActualizar({
+                                name: dev.name || "Sin nombre",
+                                address: dev.address,
+                                type: "classic",
+                            })
                         }
                     })
+                }
 
-                    // Limitar escaneo activo BLE a 4 segundos de forma controlada
-                    if (this.bleScanTimeout) {
-                        clearTimeout(this.bleScanTimeout)
-                    }
-
-                    this.bleScanTimeout = setTimeout(() => {
-                        try {
-                            manager.stopDeviceScan()
-                        } catch (e) {
-                            console.warn("Error al detener escaneo BLE", e)
-                        }
-
-                        bleDiscovered.forEach((device, key) => {
-                            if (!mapa.has(key)) {
-                                mapa.set(key, {
-                                    name: device.name || device.localName || "Sin nombre (BLE)",
-                                    address: device.id,
-                                    type: "ble",
-                                })
+                classicPromise = RNBluetoothClassic.startDiscovery()
+                    .then((encontrados) => {
+                        if (Array.isArray(encontrados)) {
+                            for (const d of encontrados) {
+                                if (d && d.address) {
+                                    emitirOActualizar({
+                                        name: d.name || "Sin nombre",
+                                        address: d.address,
+                                        type: "classic",
+                                    })
+                                }
                             }
-                        })
-                        this.bleScanTimeout = null
-                        resolve()
-                    }, 4000)
-                })
-            )
+                        }
+                        return encontrados
+                    })
+                    .catch((err) => {
+                        LogService.warn("[Bluetooth] Aviso en startDiscovery clásico:", err)
+                        return []
+                    })
+            } catch (err) {
+                LogService.warn("[Bluetooth] Error iniciando startDiscovery clásico:", err)
+            }
         }
 
-        await Promise.all(promesas)
+        // 3. Iniciar escaneo BLE complementario en paralelo
+        const bleManager = this.getBleManager()
+        if (bleManager) {
+            try {
+                bleManager.startDeviceScan(null, null, (error, bleDev) => {
+                    if (!error && bleDev && bleDev.id) {
+                        emitirOActualizar({
+                            name: bleDev.name || bleDev.localName || "Dispositivo BLE",
+                            address: bleDev.id,
+                            type: "ble",
+                        })
+                    }
+                })
+            } catch (bleErr) {
+                LogService.warn("[BLE] Error al iniciar escaneo BLE:", bleErr)
+            }
+        }
 
-        return Array.from(mapa.values())
+        // 4. Temporizador de descubrimiento activo: esperar a que termine la búsqueda o expire duracionMs
+        await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+                resolve()
+            }, duracionMs)
+
+            classicPromise.finally(() => {
+                clearTimeout(timer)
+                resolve()
+            })
+        })
+
+        // 5. Limpieza de listeners y detención del hardware de escaneo
+        if (subscripcionClassic) {
+            try {
+                subscripcionClassic.remove()
+            } catch {}
+        }
+
+        await this.cancelarDescubrimiento()
+
+        return Array.from(mapaDispositivos.values())
     }
 
     /**
-     * Establece conexión inalámbrica con el locker especificado con timeout controlado.
+     * Abre directamente la pantalla nativa de Ajustes de Bluetooth del sistema operativo
+     * para que el usuario pueda emparejar su Pocket Locker con PIN de emparejamiento nativo (2415).
+     * En Android prioriza el intent nativo de ajustes Bluetooth para una experiencia ágil y sin fricciones.
+     */
+    async abrirAjustesBluetooth(): Promise<void> {
+        if (Platform.OS === "android") {
+            try {
+                if (
+                    NativeModules.RNBluetoothClassic &&
+                    typeof NativeModules.RNBluetoothClassic.openBluetoothSettings === "function"
+                ) {
+                    NativeModules.RNBluetoothClassic.openBluetoothSettings()
+                    return
+                }
+            } catch (e) {
+                LogService.warn("[Bluetooth] Fallo al invocar openBluetoothSettings nativo:", e)
+            }
+
+            try {
+                await Linking.sendIntent("android.settings.BLUETOOTH_SETTINGS")
+                return
+            } catch (intentErr) {
+                LogService.warn("[Bluetooth] Fallo al enviar intent de ajustes bluetooth:", intentErr)
+            }
+        }
+
+        try {
+            await Linking.openSettings()
+        } catch (linkErr) {
+            LogService.warn("[Bluetooth] Fallo al abrir ajustes de sistema:", linkErr)
+        }
+    }
+
+    /**
+     * Establece conexión inalámbrica con el locker especificado con timeout controlado y reintentos.
      *
      * @param address Dirección MAC física o UUID del dispositivo
      * @param type Tipo de conexión ('classic' o 'ble')
@@ -398,7 +570,7 @@ class BluetoothServiceClass {
         await this.cancelarDescubrimiento()
 
         const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("Tiempo de espera agotado: El Pocket Locker no responde")), 4500)
+            setTimeout(() => reject(new Error("Tiempo de espera agotado: El Pocket Locker no responde")), 18000)
         )
 
         if (type === "classic") {
@@ -412,12 +584,67 @@ class BluetoothServiceClass {
                     if (sigueConectado) return
                 }
 
-                const device = await Promise.race([
-                    RNBluetoothClassic.connectToDevice(address, {
-                        delimiter: "\n",
-                    }),
-                    timeoutPromise,
-                ])
+                // Asegurar detención de cualquier escaneo y estabilizar el adaptador
+                await this.cancelarDescubrimiento()
+                await new Promise((r) => setTimeout(r, 250))
+
+                // Verificar si ya está vinculado en el sistema operativo
+                let yaEmparejado = false
+                try {
+                    const emparejados = await RNBluetoothClassic.getBondedDevices()
+                    yaEmparejado =
+                        Array.isArray(emparejados) &&
+                        emparejados.some((d) => d && d.address && d.address.toLowerCase() === address.toLowerCase())
+                } catch (pairCheckErr) {
+                    LogService.warn("[Classic] Aviso al comprobar dispositivos emparejados:", pairCheckErr)
+                }
+
+                // Si nunca se ha vinculado previamente, solicitar vinculación nativa
+                if (!yaEmparejado) {
+                    LogService.info("[Classic] Dispositivo no vinculado previamente. Solicitando vinculación nativa para:", address)
+                    try {
+                        const pairPromise = RNBluetoothClassic.pairDevice(address)
+                        const pairTimeout = new Promise((_, reject) =>
+                            setTimeout(() => reject(new Error("Timeout esperando confirmación de vinculación")), 4000)
+                        )
+                        await Promise.race([pairPromise, pairTimeout])
+                        LogService.info("[Classic] Vinculación nativa completada con éxito.")
+                    } catch (pairErr) {
+                        LogService.warn("[Classic] Aviso durante pairDevice (se continúa con intento de conexión directa):", pairErr)
+                    }
+                    // Margen de 400ms para permitir que la pila Bluetooth de Android asiente la clave de enlace
+                    await new Promise((r) => setTimeout(r, 400))
+                }
+
+                // Conexión RFCOMM con reintentos y tolerancia a fallos transitorios de emparejamiento
+                let device: BluetoothDevice | null = null
+                let ultimoError: any = null
+                const maxIntentos = 3
+
+                for (let intento = 1; intento <= maxIntentos; intento++) {
+                    try {
+                        LogService.info(`[Classic] Abriendo canal RFCOMM con ${address} (intento ${intento}/${maxIntentos})...`)
+                        const singleConnectPromise = RNBluetoothClassic.connectToDevice(address, {
+                            delimiter: "\n",
+                        })
+                        const singleTimeout = new Promise<never>((_, reject) =>
+                            setTimeout(() => reject(new Error("Tiempo de espera agotado al conectar")), 7000)
+                        )
+                        device = await Promise.race([singleConnectPromise, singleTimeout])
+                        if (device) break
+                    } catch (connErr) {
+                        ultimoError = connErr
+                        LogService.warn(`[Classic] Intento ${intento} fallido:`, connErr)
+                        if (intento < maxIntentos) {
+                            await new Promise((r) => setTimeout(r, intento * 700))
+                        }
+                    }
+                }
+
+                if (!device) {
+                    throw ultimoError || new Error("No se pudo conectar al dispositivo")
+                }
+
                 this.dispositivoConectadoClassic = device
 
                 // Registrar escucha activa de desconexión física y datos para Classic
@@ -539,18 +766,40 @@ class BluetoothServiceClass {
 
                 if (finalizado) return
 
-                if (linea.startsWith("OK:")) {
+                if (linea.startsWith("OK:") || linea.startsWith("INFO:")) {
                     limpiar()
                     resolve(linea)
                 } else if (linea.startsWith("ERR:COOLDOWN:")) {
                     limpiar()
                     const partes = linea.split(":")
-                    const ms = parseInt(partes[2] || "2000", 10)
-                    const seg = (ms / 1000).toFixed(1)
+                    // El firmware envía "ERR:COOLDOWN:<PUERTA>:<SEGUNDOS>" (ej. ERR:COOLDOWN:PEATONAL:5)
+                    // Soportamos tanto formato con nombre de puerta (partes[3]) como formato directo en ms/seg (partes[2])
+                    let seg = 5
+                    if (partes.length >= 4) {
+                        const parsed = parseInt(partes[3], 10)
+                        seg = isNaN(parsed) ? 5 : parsed
+                    } else if (partes.length >= 3) {
+                        const parsed = parseInt(partes[2], 10)
+                        if (!isNaN(parsed)) {
+                            seg = parsed > 100 ? Math.ceil(parsed / 1000) : parsed
+                        }
+                    }
                     reject(new Error(`Relé en enfriamiento. Espera ${seg}s para volver a pulsar.`))
-                } else if (linea.startsWith("ERR:EN_EJECUCION:")) {
+                } else if (linea.startsWith("ERR:EN_EJECUCION")) {
                     limpiar()
                     reject(new Error("La apertura ya se encuentra en ejecución actualmente."))
+                } else if (linea.startsWith("ERR:BLOQUEADO")) {
+                    limpiar()
+                    reject(new Error("Tu acceso está bloqueado o tus días de validez han expirado."))
+                } else if (linea.startsWith("ERR:SIN_PERMISO_PEATONAL")) {
+                    limpiar()
+                    reject(new Error("No tienes permiso de acceso a la puerta peatonal."))
+                } else if (linea.startsWith("ERR:SIN_PERMISO_GARAJE")) {
+                    limpiar()
+                    reject(new Error("No tienes permiso de acceso al portón de garaje."))
+                } else if (linea.startsWith("ERR:SIN_PERMISO")) {
+                    limpiar()
+                    reject(new Error("No tienes permiso asignado para esta puerta."))
                 } else if (linea.startsWith("ERR:AUTH_INVALIDA") || linea.startsWith("ERR:AUTH_FALLIDA")) {
                     limpiar()
                     reject(new Error("Clave o firma de seguridad incorrecta. Revisa el PIN en Ajustes."))
@@ -565,6 +814,55 @@ class BluetoothServiceClass {
             } catch (e) {
                 limpiar()
                 reject(e)
+            }
+        })
+    }
+
+    /**
+     * Envía un comando y recopila líneas de telemetría continuas hasta una línea delimitadora
+     * (por ejemplo 'END:USERS') o agotarse el tiempo de espera.
+     */
+    async enviarComandoEsperarLineas(
+        comando: string,
+        lineaFin: string = "END:USERS",
+        type: "classic" | "ble" = "classic",
+        timeoutMs: number = 4000
+    ): Promise<string[]> {
+        return new Promise<string[]>(async (resolve) => {
+            const lineas: string[] = []
+            let finalizado = false
+            const callbackOriginal = this.onDatosRecibidosCallback
+
+            const limpiar = () => {
+                finalizado = true
+                clearTimeout(timer)
+                this.onDatosRecibidosCallback = callbackOriginal
+            }
+
+            const timer = setTimeout(() => {
+                if (!finalizado) {
+                    limpiar()
+                    resolve(lineas)
+                }
+            }, timeoutMs)
+
+            this.onDatosRecibidosCallback = (linea: string) => {
+                if (callbackOriginal) callbackOriginal(linea)
+                if (finalizado) return
+
+                if (linea.startsWith(lineaFin)) {
+                    limpiar()
+                    resolve(lineas)
+                } else {
+                    lineas.push(linea)
+                }
+            }
+
+            try {
+                await this.enviarComando(comando, type)
+            } catch {
+                limpiar()
+                resolve(lineas)
             }
         })
     }
@@ -604,7 +902,7 @@ class BluetoothServiceClass {
             try {
                 await this.dispositivoConectadoClassic.disconnect()
             } catch (e) {
-                console.warn("Error al desconectar clásico", e)
+                LogService.warn("Error al desconectar clásico", e)
             } finally {
                 this.dispositivoConectadoClassic = null
             }
@@ -614,7 +912,7 @@ class BluetoothServiceClass {
             try {
                 await this.dispositivoConectadoBle.cancelConnection()
             } catch (e) {
-                console.warn("Error al desconectar BLE", e)
+                LogService.warn("Error al desconectar BLE", e)
             } finally {
                 this.dispositivoConectadoBle = null
             }
@@ -655,7 +953,7 @@ class BluetoothServiceClass {
             try {
                 await RNBluetoothClassic.cancelDiscovery()
             } catch (e) {
-                console.warn("Error al cancelar discovery clásico", e)
+                LogService.warn("Error al cancelar discovery clásico", e)
             }
         }
         try {
@@ -664,7 +962,7 @@ class BluetoothServiceClass {
                 manager.stopDeviceScan()
             }
         } catch (e) {
-            console.warn("Error al cancelar discovery BLE", e)
+            LogService.warn("Error al cancelar discovery BLE", e)
         }
     }
 
@@ -692,7 +990,7 @@ class BluetoothServiceClass {
             }
             return null
         } catch (e) {
-            console.warn("Error buscando características de escritura BLE", e)
+            LogService.warn("Error buscando características de escritura BLE", e)
             return null
         }
     }

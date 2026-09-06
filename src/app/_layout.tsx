@@ -25,8 +25,10 @@ export default function RootLayout() {
         >
           <Stack.Screen name="index" />
           <Stack.Screen name="splash" />
+          <Stack.Screen name="nombre" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="control" />
+          <Stack.Screen name="admin" />
           <Stack.Screen name="resultado" />
           <Stack.Screen name="+not-found" />
         </Stack>

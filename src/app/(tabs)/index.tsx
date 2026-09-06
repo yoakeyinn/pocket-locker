@@ -1,68 +1,186 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  AppState,
   FlatList,
-  Modal,
   RefreshControl,
-  StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import { router } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Colors } from '../../constants/Colors';
+import * as Haptics from 'expo-haptics';
 import BluetoothService, { DispositivoBT } from '../../services/BluetoothService';
+import LogService from '../../services/LogService';
+import { parsearYValidarPin, DEFAULT_SECURITY_PIN } from '../../services/StorageService';
 import { useBluetooth } from '../../context/BluetoothContext';
+import ActiveLockerCard from '../../components/inicio/ActiveLockerCard';
+import DeviceListItem from '../../components/inicio/DeviceListItem';
+import EmptyDeviceList from '../../components/inicio/EmptyDeviceList';
+import ModalVincularDispositivo from '../../components/inicio/ModalVincularDispositivo';
+import tw from '../../styles/tailwind';
 
 /**
  * Pantalla Principal (Tab Inicio).
- * Comportamiento dual dinámico:
- * 1. Si no hay ningún Pocket Locker vinculado: Muestra interfaz de escaneo, búsqueda y vinculación.
- * 2. Si ya existe un Pocket Locker vinculado: Muestra la tarjeta de estado del locker y botón de acceso al panel de control.
+ * Arquitectura modular con 3 vistas adaptativas:
+ * 1. Vista Locker Activo: Si ya existe un dispositivo guardado, muestra la tarjeta de control.
+ * 2. Vista Auto-Conexión (Radar): Búsqueda inteligente en segundo plano tras el onboarding sin fricción.
+ * 3. Vista Manual (Dispositivos cercanos): Fallback automático tras 12s para selección y recarga manual.
  */
 export default function InicioScreen() {
   const {
     deviceMac,
     deviceName,
+    userName,
     status,
     actualizarDispositivoVinculado,
-    modoSimulacion,
-    setModoSimulacion,
     conectar,
   } = useBluetooth();
 
+  // Estados de modo de conexión y escaneo
+  const [modoConexion, setModoConexion] = useState<'auto' | 'manual'>('auto');
+  const [estadoAutoTexto, setEstadoAutoTexto] = useState('Buscando tu Pocket Locker...');
+  const [estadoAutoSubtexto, setEstadoAutoSubtexto] = useState('Detección inteligente en segundo plano');
+
   const [escaneando, setEscaneando] = useState(false);
+  const [refrescando, setRefrescando] = useState(false);
   const [dispositivos, setDispositivos] = useState<DispositivoBT[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [dispositivoSeleccionado, setDispositivoSeleccionado] = useState<DispositivoBT | null>(null);
   const [nombrePersonalizado, setNombrePersonalizado] = useState('');
+  const [pinSeguridad, setPinSeguridad] = useState('');
   const [guardando, setGuardando] = useState(false);
 
+  // Cerrojos y referencias para evitar carreras y dobles permisos
+  const autoDetectadoRef = useRef(false);
+  const autoIniciadoRef = useRef(false);
+  const busquedaEnProgresoRef = useRef(false);
+  const autoTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const userNameRef = useRef(userName);
+  userNameRef.current = userName;
+  const actualizarRef = useRef(actualizarDispositivoVinculado);
+  actualizarRef.current = actualizarDispositivoVinculado;
+
+  // Referencias para la animación del radar (ondas expansivas concéntricas a 60 FPS)
+  const radarPulse1 = useRef(new Animated.Value(1)).current;
+  const radarPulse2 = useRef(new Animated.Value(1)).current;
+  const radarOpacity1 = useRef(new Animated.Value(0.7)).current;
+  const radarOpacity2 = useRef(new Animated.Value(0.7)).current;
+
+  // Ciclo continuo de la animación del radar durante la búsqueda automática
+  useEffect(() => {
+    let anim1: Animated.CompositeAnimation | null = null;
+    let anim2: Animated.CompositeAnimation | null = null;
+
+    if (!deviceMac && modoConexion === 'auto') {
+      const crearRadarLoop = (pulse: Animated.Value, opacity: Animated.Value, delayMs: number) => {
+        return Animated.loop(
+          Animated.sequence([
+            Animated.delay(delayMs),
+            Animated.parallel([
+              Animated.timing(pulse, {
+                toValue: 2.2,
+                duration: 2200,
+                useNativeDriver: true,
+              }),
+              Animated.timing(opacity, {
+                toValue: 0,
+                duration: 2200,
+                useNativeDriver: true,
+              }),
+            ]),
+            Animated.timing(pulse, {
+              toValue: 1,
+              duration: 0,
+              useNativeDriver: true,
+            }),
+            Animated.timing(opacity, {
+              toValue: 0.7,
+              duration: 0,
+              useNativeDriver: true,
+            }),
+          ])
+        );
+      };
+
+      anim1 = crearRadarLoop(radarPulse1, radarOpacity1, 0);
+      anim2 = crearRadarLoop(radarPulse2, radarOpacity2, 1100);
+
+      anim1.start();
+      anim2.start();
+    }
+
+    return () => {
+      if (anim1) anim1.stop();
+      if (anim2) anim2.stop();
+      radarPulse1.setValue(1);
+      radarPulse2.setValue(1);
+      radarOpacity1.setValue(0.7);
+      radarOpacity2.setValue(0.7);
+    };
+  }, [deviceMac, modoConexion, radarPulse1, radarPulse2, radarOpacity1, radarOpacity2]);
+
   /**
-   * Ejecuta el escaneo de dispositivos Bluetooth cercanos en Classic y BLE.
+   * Abre directamente los Ajustes de Bluetooth del teléfono.
    */
-  const buscarDispositivos = useCallback(async () => {
-    setEscaneando(true);
+  const onAbrirAjustesBluetooth = useCallback(async () => {
     try {
-      if (modoSimulacion) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        setDispositivos([
-          { name: 'Pocket Locker (SIMULADO)', address: '11:22:33:44:55:66', type: 'classic' },
-        ]);
+      await BluetoothService.abrirAjustesBluetooth();
+    } catch {
+      Alert.alert(
+        'Ajustes',
+        'Abre la aplicación de Ajustes de tu móvil y entra en Bluetooth para vincular el Pocket Locker.'
+      );
+    }
+  }, []);
+
+  /**
+   * Inicia el diálogo de vinculación manual al pulsar un dispositivo de la lista.
+   */
+  const iniciarVinculacion = useCallback((dispositivo: DispositivoBT) => {
+    BluetoothService.cancelarDescubrimiento().catch(() => {});
+    setEscaneando(false);
+    setDispositivoSeleccionado(dispositivo);
+    setNombrePersonalizado(dispositivo.name && dispositivo.name !== 'Sin nombre' ? dispositivo.name : 'Pocket Locker');
+    setPinSeguridad('');
+    setModalVisible(true);
+  }, []);
+
+  /**
+   * Búsqueda manual de dispositivos (pull-to-refresh o botón de recargar).
+   */
+  const buscarDispositivos = useCallback(async (desdePullToRefresh: boolean = false) => {
+    if (busquedaEnProgresoRef.current) return;
+    busquedaEnProgresoRef.current = true;
+
+    if (desdePullToRefresh) {
+      setRefrescando(true);
+    } else {
+      setEscaneando(true);
+    }
+    setDispositivos([]);
+
+    try {
+      const soportado = await BluetoothService.esSoportado();
+      if (!soportado) {
+        Alert.alert('Bluetooth no disponible', 'Tu dispositivo móvil no soporta Bluetooth');
         return;
       }
 
-      const soportado = await BluetoothService.esSoportado();
-      if (!soportado) {
+      const okPermisos = await BluetoothService.solicitarPermisos();
+      if (!okPermisos) {
         Alert.alert(
-          'Bluetooth no disponible',
-          'Tu dispositivo móvil no soporta Bluetooth'
+          'Permisos necesarios',
+          'Pocket Locker necesita permisos de Bluetooth y Ubicación para encontrar tu dispositivo.',
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Abrir Ajustes', onPress: onAbrirAjustesBluetooth },
+          ]
         );
         return;
       }
@@ -73,538 +191,466 @@ export default function InicioScreen() {
         if (!activado) {
           Alert.alert(
             'Bluetooth apagado',
-            'Activa el Bluetooth para continuar'
+            'Por favor, activa el Bluetooth para poder buscar y conectar tu Pocket Locker.',
+            [
+              { text: 'Cancelar', style: 'cancel' },
+              { text: 'Abrir Ajustes', onPress: onAbrirAjustesBluetooth },
+            ]
           );
           return;
         }
       }
 
-      const lista = await BluetoothService.listarDispositivos();
+      const lista = await BluetoothService.listarDispositivos((nuevoDispositivo) => {
+        setDispositivos((prev) => {
+          const index = prev.findIndex((d) => d.address.toLowerCase() === nuevoDispositivo.address.toLowerCase());
+          if (index >= 0) {
+            const copia = [...prev];
+            copia[index] = nuevoDispositivo;
+            return copia;
+          }
+          return [...prev, nuevoDispositivo];
+        });
+      });
       setDispositivos(lista);
-
-      if (lista.length === 0) {
-        Alert.alert(
-          'Sin dispositivos',
-          'No se encontraron dispositivos cercanos o emparejados. Asegúrate de que tu Pocket Locker esté encendido.'
-        );
-      }
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudieron buscar dispositivos');
+      Alert.alert('Aviso', e?.message || 'No se pudieron buscar dispositivos');
     } finally {
       setEscaneando(false);
+      setRefrescando(false);
+      busquedaEnProgresoRef.current = false;
     }
-  }, [modoSimulacion]);
+  }, [onAbrirAjustesBluetooth]);
+
+  const buscarDispositivosRef = useRef(buscarDispositivos);
+  buscarDispositivosRef.current = buscarDispositivos;
 
   /**
-   * Inicia el flujo de vinculación abriendo el diálogo para asignar un nombre amigable.
+   * Búsqueda y vinculación automática inteligente en segundo plano.
+   * Si detecta PLBT, lo empareja y conecta directamente. Si pasan 12s, pasa a modo manual.
    */
-  const iniciarVinculacion = useCallback((dispositivo: DispositivoBT) => {
-    setDispositivoSeleccionado(dispositivo);
-    setNombrePersonalizado(dispositivo.name.replace(' (SIMULADO)', ''));
-    setModalVisible(true);
-  }, []);
+  const ejecutarAutoConexion = useCallback(async () => {
+    if (busquedaEnProgresoRef.current || deviceMac) return;
+    busquedaEnProgresoRef.current = true;
+    autoDetectadoRef.current = false;
+    setModoConexion('auto');
+    setEstadoAutoTexto('Buscando tu Pocket Locker...');
+    setEstadoAutoSubtexto('Búsqueda inteligente en segundo plano');
+
+    // Timeout de 12 segundos: si no se detecta el locker, cambiar suavemente al modo manual
+    if (autoTimeoutRef.current) clearTimeout(autoTimeoutRef.current);
+    autoTimeoutRef.current = setTimeout(() => {
+      if (!autoDetectadoRef.current) {
+        busquedaEnProgresoRef.current = false;
+        setModoConexion('manual');
+        buscarDispositivosRef.current(false);
+      }
+    }, 15000);
+
+    try {
+      const soportado = await BluetoothService.esSoportado();
+      if (!soportado) {
+        setModoConexion('manual');
+        return;
+      }
+
+      const okPermisos = await BluetoothService.solicitarPermisos();
+      if (!okPermisos) {
+        setModoConexion('manual');
+        return;
+      }
+
+      const encendido = await BluetoothService.estaEncendido();
+      if (!encendido) {
+        setEstadoAutoTexto('Activando Bluetooth...');
+        setEstadoAutoSubtexto('Esperando confirmación del sistema');
+        const activado = await BluetoothService.pedirActivar();
+        if (!activado) {
+          setModoConexion('manual');
+          return;
+        }
+      }
+
+      setEstadoAutoTexto('Buscando tu Pocket Locker...');
+      setEstadoAutoSubtexto('Localizando dispositivo cercano');
+
+      const lista = await BluetoothService.listarDispositivos(async (nuevoDispositivo) => {
+        if (autoDetectadoRef.current) return;
+        const nombreUpper = (nuevoDispositivo.name || '').toUpperCase().trim();
+        if (
+          nombreUpper === 'PLBT' ||
+          nombreUpper.startsWith('PLBT') ||
+          nombreUpper.includes('POCKET LOCKER') ||
+          nombreUpper.includes('ESP32')
+        ) {
+          autoDetectadoRef.current = true;
+          if (autoTimeoutRef.current) clearTimeout(autoTimeoutRef.current);
+
+          setEstadoAutoTexto('Pocket Locker detectado');
+          setEstadoAutoSubtexto('Vinculando y configurando acceso...');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+
+          try {
+            await BluetoothService.cancelarDescubrimiento();
+            await BluetoothService.vincularDispositivo(nuevoDispositivo.address);
+            await actualizarRef.current(
+              nuevoDispositivo.address,
+              'Pocket Locker',
+              nuevoDispositivo.type || 'classic',
+              DEFAULT_SECURITY_PIN,
+              userNameRef.current || 'Usuario'
+            );
+            router.replace('/control');
+          } catch {
+            setModoConexion('manual');
+          }
+        }
+      }, 10000);
+
+      // Si terminó el descubrimiento sin auto-detección por callback, verificar si el locker está en la lista final devuelta
+      if (!autoDetectadoRef.current) {
+        const lockerEnLista = lista.find((d) => {
+          const n = (d.name || '').toUpperCase().trim();
+          return (
+            n === 'PLBT' ||
+            n.startsWith('PLBT') ||
+            n.includes('POCKET LOCKER') ||
+            n.includes('ESP32')
+          );
+        });
+
+        if (lockerEnLista) {
+          autoDetectadoRef.current = true;
+          if (autoTimeoutRef.current) clearTimeout(autoTimeoutRef.current);
+
+          setEstadoAutoTexto('Pocket Locker detectado');
+          setEstadoAutoSubtexto('Vinculando y configurando acceso...');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+
+          try {
+            await BluetoothService.cancelarDescubrimiento();
+            await BluetoothService.vincularDispositivo(lockerEnLista.address);
+            await actualizarRef.current(
+              lockerEnLista.address,
+              'Pocket Locker',
+              lockerEnLista.type || 'classic',
+              DEFAULT_SECURITY_PIN,
+              userNameRef.current || 'Usuario'
+            );
+            router.replace('/control');
+            return;
+          } catch (err) {
+            LogService.warn('Aviso en auto-conexión por lista:', err);
+            setDispositivos(lista);
+            setModoConexion('manual');
+            return;
+          }
+        }
+
+        setDispositivos(lista);
+        setModoConexion('manual');
+      }
+    } catch {
+      if (!autoDetectadoRef.current) {
+        setModoConexion('manual');
+      }
+    } finally {
+      busquedaEnProgresoRef.current = false;
+    }
+  }, [deviceMac]);
 
   /**
-   * Confirma y guarda la vinculación del dispositivo seleccionado.
+   * Confirma y guarda la vinculación manual con PIN.
    */
   const confirmarVinculacion = useCallback(async () => {
     if (!dispositivoSeleccionado) return;
-    const nombre = nombrePersonalizado.trim() || dispositivoSeleccionado.name;
+    const nombre = nombrePersonalizado.trim() || dispositivoSeleccionado.name || 'Pocket Locker';
+    const pinLimpio = pinSeguridad.trim().toUpperCase();
+
+    if (!pinLimpio) {
+      Alert.alert('PIN requerido', 'Introduce el PIN de seguridad configurado para tu Pocket Locker.');
+      return;
+    }
+
+    const val = parsearYValidarPin(pinLimpio);
+    if (!val.esValido) {
+      Alert.alert('PIN inválido', val.mensajeError || 'El PIN introducido no cumple con el formato requerido.');
+      return;
+    }
+
     setGuardando(true);
     try {
+      await BluetoothService.cancelarDescubrimiento();
+      await BluetoothService.vincularDispositivo(dispositivoSeleccionado.address);
+
+      // Cerrar modal de inmediato para eliminar fricción y navegar a control
+      setModalVisible(false);
+
       await actualizarDispositivoVinculado(
         dispositivoSeleccionado.address,
         nombre,
-        dispositivoSeleccionado.type || 'classic'
+        dispositivoSeleccionado.type || 'classic',
+        pinLimpio,
+        userName || 'Usuario'
       );
-      setModalVisible(false);
-      router.push('/control');
-    } catch {
-      Alert.alert('Error', 'No se pudo guardar y vincular el dispositivo');
+      router.replace('/control');
+    } catch (e: any) {
+      setModalVisible(true);
+      Alert.alert(
+        'Error de vinculación',
+        e?.message || 'No se pudo vincular con el Pocket Locker.',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Abrir Ajustes', onPress: onAbrirAjustesBluetooth },
+        ]
+      );
     } finally {
       setGuardando(false);
     }
-  }, [dispositivoSeleccionado, nombrePersonalizado, actualizarDispositivoVinculado]);
+  }, [dispositivoSeleccionado, nombrePersonalizado, pinSeguridad, actualizarDispositivoVinculado, userName, onAbrirAjustesBluetooth]);
 
   /**
-   * Navega hacia la pantalla de control de accesos intentando conectar si es necesario.
+   * Entra a los controles si ya está vinculado.
    */
   const entrarAlDispositivo = useCallback(async () => {
     if (status !== 'connected') {
       try {
         await conectar();
       } catch {
-        // Permitir entrar a la pantalla de control incluso si requiere reconexión allí
+        // Permitir entrar incluso si requiere reconectar en el panel
       }
     }
     router.push('/control');
   }, [status, conectar]);
 
-  /**
-   * Renderizado individual de cada dispositivo encontrado en la lista de escaneo.
-   */
-  const renderDeviceItem = useCallback(({ item }: { item: DispositivoBT }) => (
-    <TouchableOpacity
-      style={styles.deviceItem}
-      onPress={() => iniciarVinculacion(item)}
-      activeOpacity={0.7}
-    >
-      <MaterialIcons
-        name="bluetooth"
-        size={24}
-        color={Colors.azulPrimario}
-        style={styles.deviceIcon}
-      />
-      <View style={styles.deviceText}>
-        <Text style={styles.deviceName}>{item.name}</Text>
-        <Text style={styles.deviceMac}>{item.address}</Text>
-      </View>
-      <MaterialIcons
-        name="chevron-right"
-        size={24}
-        color={Colors.textoSecundario}
-      />
-    </TouchableOpacity>
-  ), [iniciarVinculacion]);
+  const renderDeviceItem = useCallback(
+    ({ item }: { item: DispositivoBT }) => (
+      <DeviceListItem item={item} onPress={() => iniciarVinculacion(item)} />
+    ),
+    [iniciarVinculacion]
+  );
 
+  // Inicializar escaneo automático al entrar si no hay dispositivo vinculado
   useEffect(() => {
-    if (!deviceMac) {
-      buscarDispositivos();
+    if (!deviceMac && !autoIniciadoRef.current && modoConexion === 'auto') {
+      autoIniciadoRef.current = true;
+      ejecutarAutoConexion();
     }
+  }, [deviceMac, modoConexion, ejecutarAutoConexion]);
+
+  // Limpieza de tareas solo al desmontar la pantalla
+  useEffect(() => {
     return () => {
+      if (autoTimeoutRef.current) clearTimeout(autoTimeoutRef.current);
       BluetoothService.cancelarDescubrimiento().catch(() => {});
     };
-  }, [deviceMac, buscarDispositivos]);
+  }, []);
 
-  // Si hay dispositivo guardado
+  // Listener de AppState con control anti-reentrada (solo en modo manual)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && !deviceMac) {
+        if (modoConexion === 'manual' && !busquedaEnProgresoRef.current) {
+          buscarDispositivos(false);
+        }
+      }
+    });
+    return () => sub?.remove?.();
+  }, [deviceMac, modoConexion, buscarDispositivos]);
+
+  // VISTA 1: Dispositivo guardado
   if (deviceMac) {
-    let statusLabel = 'Desconectado';
-    let statusColor = Colors.textoSecundario;
-
-    if (status === 'connected') {
-      statusLabel = 'Conectado';
-      statusColor = Colors.exitoVerde;
-    } else if (status === 'connecting') {
-      statusLabel = 'Conectando...';
-      statusColor = '#FF9800';
-    }
-
     return (
-      <SafeAreaView style={styles.container} edges={['top']}>
-        {modoSimulacion && (
-          <View style={styles.bannerSimulacion}>
-            <Text style={styles.bannerSimulacionTexto}>Modo Simulación Activo</Text>
-          </View>
-        )}
-        <View style={styles.content}>
-          <Text style={styles.header}>Mi Pocket Locker</Text>
-          <Text style={styles.helper}>Pulsa en el locker para acceder a los controles.</Text>
+      <SafeAreaView style={tw`flex-1 bg-beige-bg`} edges={['top']}>
+        <View style={tw`flex-1 p-5`}>
+          <Text style={tw`text-2xl font-bold text-azul-oscuro mb-1`}>Mi Pocket Locker</Text>
+          <Text style={tw`text-sm text-texto-secundario mb-6`}>
+            Pulsa en el locker para acceder a los controles.
+          </Text>
 
-          <TouchableOpacity
-            style={styles.activeDeviceCard}
+          <ActiveLockerCard
+            deviceName={deviceName}
+            deviceMac={deviceMac}
+            status={status}
             onPress={entrarAlDispositivo}
-            activeOpacity={0.9}
-          >
-            <View style={styles.cardHeader}>
-              <View style={[styles.statusIndicator, { backgroundColor: statusColor }]} />
-              <Text style={[styles.cardStatusText, { color: statusColor }]}>{statusLabel}</Text>
-            </View>
-
-            <View style={styles.cardMain}>
-              <MaterialIcons name="lock" size={48} color={Colors.azulPrimario} />
-              <View style={styles.cardInfo}>
-                <Text style={styles.cardName}>{deviceName}</Text>
-                <Text style={styles.cardMac}>{deviceMac}</Text>
-              </View>
-            </View>
-
-            <View style={styles.cardFooter}>
-              <Text style={styles.cardFooterText}>Entrar a los controles</Text>
-              <MaterialIcons name="arrow-forward" size={18} color={Colors.azulPrimario} />
-            </View>
-          </TouchableOpacity>
+          />
         </View>
       </SafeAreaView>
     );
   }
 
-  // Si NO hay dispositivo guardado (Escaneo)
-  return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {modoSimulacion && (
-        <TouchableOpacity
-          onPress={() => setModoSimulacion(false)}
-          style={styles.bannerSimulacion}
-          activeOpacity={0.9}
-        >
-          <Text style={styles.bannerSimulacionTexto}>
-            Modo Demo Activo (Toca para desactivar)
-          </Text>
-        </TouchableOpacity>
-      )}
-      <View style={styles.content}>
-        <View style={styles.headerRow}>
-          <Text style={styles.header}>Vincular dispositivo</Text>
-          <TouchableOpacity
-            testID="simulacion-toggle"
-            onPress={() => setModoSimulacion(!modoSimulacion)}
-            style={styles.btnSimulacion}
-            activeOpacity={0.7}
-          >
-            <MaterialIcons
-              name={modoSimulacion ? 'bug-report' : 'developer-mode'}
-              size={24}
-              color={modoSimulacion ? Colors.errorRojo : Colors.textoSecundario}
+  // VISTA 2: Búsqueda y Auto-Conexión Inteligente (Radar Animation)
+  if (modoConexion === 'auto') {
+    return (
+      <SafeAreaView style={tw`flex-1 bg-beige-bg`} edges={['top', 'bottom']}>
+        <View style={tw`flex-1 items-center justify-between p-6`}>
+          {/* Cabecera */}
+          <View style={tw`items-center mt-6`}>
+            <Text style={tw`text-2xl font-bold text-azul-oscuro text-center`}>
+              Buscando tu Pocket Locker
+            </Text>
+            <Text style={tw`text-sm text-texto-secundario text-center mt-1.5 px-4 leading-5`}>
+              Configurando el acceso automáticamente para {userName || 'tu perfil'}
+            </Text>
+          </View>
+
+          {/* Área animada central con radar nativo */}
+          <View style={tw`items-center justify-center my-auto w-72 h-72`}>
+            {/* Anillo de radar exterior */}
+            <Animated.View
+              style={[
+                tw`w-64 h-64 rounded-full absolute bg-azul-primario/15 border border-azul-primario/25`,
+                {
+                  transform: [{ scale: radarPulse1 }],
+                  opacity: radarOpacity1,
+                },
+              ]}
             />
-          </TouchableOpacity>
+            {/* Anillo de radar intermedio */}
+            <Animated.View
+              style={[
+                tw`w-52 h-52 rounded-full absolute bg-azul-primario/20 border border-azul-primario/30`,
+                {
+                  transform: [{ scale: radarPulse2 }],
+                  opacity: radarOpacity2,
+                },
+              ]}
+            />
+
+            {/* Círculo central con icono */}
+            <View style={tw`w-28 h-28 rounded-full bg-azul-primario items-center justify-center shadow-xl border-4 border-white`}>
+              <MaterialIcons name="lock-outline" size={48} color="#FFFFFF" />
+            </View>
+          </View>
+
+          {/* Estado dinámico inferior y opción manual */}
+          <View style={tw`w-full items-center mb-8`}>
+            <View style={tw`flex-row items-center justify-center mb-2`}>
+              <ActivityIndicator size="small" color="#2C5F8A" />
+              <Text style={tw`text-base font-bold text-azul-oscuro ml-2.5`}>
+                {estadoAutoTexto}
+              </Text>
+            </View>
+            <Text style={tw`text-xs text-texto-secundario text-center mb-6`}>
+              {estadoAutoSubtexto}
+            </Text>
+
+            <TouchableOpacity
+              testID="btn-ir-manual"
+              style={tw`py-3 px-6 rounded-2xl bg-white border border-stone-200 shadow-sm`}
+              onPress={() => {
+                if (autoTimeoutRef.current) clearTimeout(autoTimeoutRef.current);
+                setModoConexion('manual');
+                buscarDispositivos(false);
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={tw`text-xs font-bold text-azul-oscuro tracking-wider uppercase`}>
+                Ver dispositivos manualmente
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
-        <Text style={styles.helper}>
-          Asegúrate de activar el Bluetooth y emparejar tu Pocket Locker en los ajustes del sistema.
+      </SafeAreaView>
+    );
+  }
+
+  // VISTA 3: Escaneo manual de dispositivos cercanos (Fallback)
+  return (
+    <SafeAreaView style={tw`flex-1 bg-beige-bg`} edges={['top']}>
+      <View style={tw`flex-1 p-5`}>
+        <Text style={tw`text-2xl font-bold text-azul-oscuro mb-1`}>Dispositivos cercanos</Text>
+        <Text style={tw`text-sm text-texto-secundario mb-5`}>
+          Dispositivos Bluetooth accesibles a tu alrededor. Pulsa en tu Pocket Locker para vincularlo.
         </Text>
 
-        <TouchableOpacity
-          style={[styles.boton, escaneando && styles.botonDisabled]}
-          onPress={buscarDispositivos}
-          disabled={escaneando}
-          activeOpacity={0.85}
-        >
-          {escaneando ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <>
-              <MaterialIcons name="search" size={20} color="#FFFFFF" />
-              <Text style={styles.botonTexto}>Buscar dispositivos</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {/* Botonera superior con Recargar y Reintentar Auto */}
+        <View style={tw`flex-row items-center mb-4`}>
+          <TouchableOpacity
+            testID="btn-buscar-dispositivos"
+            style={tw`flex-1 mr-2 flex-row items-center justify-center py-3.5 px-4 rounded-2xl bg-azul-primario shadow-sm ${
+              escaneando || refrescando ? 'opacity-60' : ''
+            }`}
+            onPress={() => buscarDispositivos(false)}
+            disabled={escaneando || refrescando}
+            activeOpacity={0.85}
+          >
+            {escaneando ? (
+              <View style={tw`flex-row items-center justify-center`}>
+                <ActivityIndicator color="#FFFFFF" size="small" />
+                <Text style={tw`text-white font-bold text-sm ml-2`}>Buscando...</Text>
+              </View>
+            ) : (
+              <View style={tw`flex-row items-center justify-center`}>
+                <MaterialIcons name="refresh" size={20} color="#FFFFFF" />
+                <Text style={tw`text-white font-bold text-sm ml-2`}>Recargar lista</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            testID="btn-reintentar-auto"
+            style={tw`py-3.5 px-4 rounded-2xl bg-white border border-stone-200 shadow-sm items-center justify-center`}
+            onPress={() => {
+              autoDetectadoRef.current = false;
+              busquedaEnProgresoRef.current = false;
+              setModoConexion('auto');
+              ejecutarAutoConexion();
+            }}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name="radar" size={20} color="#2C5F8A" />
+          </TouchableOpacity>
+        </View>
 
         <FlatList
           data={dispositivos}
           keyExtractor={(item) => item.address}
           renderItem={renderDeviceItem}
-          style={styles.lista}
-          contentContainerStyle={
-            dispositivos.length === 0 ? styles.listaVacia : undefined
-          }
+          style={tw`flex-1`}
+          contentContainerStyle={dispositivos.length === 0 ? tw`flex-grow justify-center` : tw`pb-6`}
           refreshControl={
             <RefreshControl
-              refreshing={escaneando}
-              onRefresh={buscarDispositivos}
-              colors={[Colors.azulPrimario]}
-              tintColor={Colors.azulPrimario}
+              refreshing={refrescando}
+              onRefresh={() => buscarDispositivos(true)}
+              colors={['#2C5F8A']}
+              tintColor="#2C5F8A"
             />
           }
           ListEmptyComponent={
-            !escaneando ? (
-              <View style={styles.emptyContainer}>
-                <Text style={styles.vacio}>
-                  Arrastra hacia abajo o pulsa &quot;Buscar dispositivos&quot; para buscar.
+            !escaneando && !refrescando ? (
+              <EmptyDeviceList onAbrirAjustes={onAbrirAjustesBluetooth} />
+            ) : null
+          }
+          ListFooterComponent={
+            dispositivos.length > 0 ? (
+              <TouchableOpacity
+                testID="btn-abrir-ajustes-footer"
+                style={tw`flex-row items-center justify-center py-4 px-2`}
+                onPress={onAbrirAjustesBluetooth}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="settings-bluetooth" size={18} color="#2C5F8A" />
+                <Text style={tw`text-xs font-semibold text-azul-primario ml-2`}>
+                  Abrir Ajustes de Bluetooth del teléfono
                 </Text>
-              </View>
+              </TouchableOpacity>
             ) : null
           }
         />
       </View>
 
-      {/* Modal para Nombre del Dispositivo */}
-      <Modal
-        animationType="fade"
-        transparent={true}
+      <ModalVincularDispositivo
         visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            style={styles.modalContent}
-          >
-            <Text style={styles.modalTitle}>Asignar nombre</Text>
-            <Text style={styles.modalSubtitle}>
-              Introduce un nombre personalizado para identificar este Pocket Locker:
-            </Text>
-
-            <TextInput
-              style={styles.modalInput}
-              value={nombrePersonalizado}
-              onChangeText={setNombrePersonalizado}
-              placeholder="Nombre del Locker"
-              placeholderTextColor="#999"
-              autoFocus
-              maxLength={24}
-            />
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={() => setModalVisible(false)}
-                disabled={guardando}
-              >
-                <Text style={styles.modalButtonCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonConfirm]}
-                onPress={confirmarVinculacion}
-                disabled={guardando}
-              >
-                {guardando ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <Text style={styles.modalButtonConfirmText}>Guardar</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
+        guardando={guardando}
+        userName={userName}
+        nombrePersonalizado={nombrePersonalizado}
+        setNombrePersonalizado={setNombrePersonalizado}
+        pinSeguridad={pinSeguridad}
+        setPinSeguridad={setPinSeguridad}
+        onCancel={() => setModalVisible(false)}
+        onConfirm={confirmarVinculacion}
+      />
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.beigeBg,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-  },
-  header: {
-    color: Colors.azulOscuro,
-    fontSize: 22,
-    fontWeight: 'bold',
-  },
-  helper: {
-    color: Colors.textoSecundario,
-    fontSize: 14,
-    marginTop: 4,
-    marginBottom: 20,
-  },
-  boton: {
-    flexDirection: 'row',
-    backgroundColor: Colors.azulPrimario,
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  botonDisabled: {
-    opacity: 0.6,
-  },
-  botonTexto: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  lista: {
-    marginTop: 20,
-    flex: 1,
-  },
-  listaVacia: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  vacio: {
-    textAlign: 'center',
-    color: Colors.textoSecundario,
-    fontSize: 14,
-    fontWeight: '500',
-    lineHeight: 20,
-  },
-  emptyContainer: {
-    paddingHorizontal: 20,
-    alignItems: 'center',
-  },
-  deviceItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.beigeCard,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    marginBottom: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
-  },
-  deviceIcon: {
-    marginRight: 12,
-  },
-  deviceText: {
-    flex: 1,
-  },
-  deviceName: {
-    color: Colors.azulOscuro,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  deviceMac: {
-    color: Colors.textoSecundario,
-    fontSize: 12,
-    marginTop: 2,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  btnSimulacion: {
-    padding: 4,
-  },
-  bannerSimulacion: {
-    backgroundColor: '#FFE0B2',
-    paddingVertical: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-  },
-  bannerSimulacionTexto: {
-    color: '#E65100',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  // Saved device view styles
-  activeDeviceCard: {
-    backgroundColor: Colors.beigeCard,
-    borderRadius: 16,
-    padding: 20,
-    marginTop: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.02)',
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(0,0,0,0.03)',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    marginBottom: 20,
-  },
-  statusIndicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 6,
-  },
-  cardStatusText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  cardMain: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  cardInfo: {
-    marginLeft: 16,
-  },
-  cardName: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: Colors.azulOscuro,
-  },
-  cardMac: {
-    fontSize: 13,
-    color: Colors.textoSecundario,
-    marginTop: 4,
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.05)',
-    paddingTop: 16,
-  },
-  cardFooterText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.azulPrimario,
-  },
-  // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  modalContent: {
-    backgroundColor: Colors.beigeCard,
-    borderRadius: 16,
-    padding: 24,
-    width: '100%',
-    maxWidth: 340,
-    alignItems: 'stretch',
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 5,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: Colors.azulOscuro,
-    marginBottom: 10,
-  },
-  modalSubtitle: {
-    fontSize: 13,
-    color: Colors.textoSecundario,
-    marginBottom: 16,
-    lineHeight: 18,
-  },
-  modalInput: {
-    borderWidth: 1,
-    borderColor: '#D2CFC7',
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    fontSize: 15,
-    color: Colors.azulOscuro,
-    backgroundColor: '#FAF9F6',
-    marginBottom: 20,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-  },
-  modalButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  modalButtonCancel: {
-    backgroundColor: 'rgba(0,0,0,0.05)',
-  },
-  modalButtonCancelText: {
-    color: Colors.textoSecundario,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  modalButtonConfirm: {
-    backgroundColor: Colors.azulPrimario,
-    minWidth: 80,
-  },
-  modalButtonConfirmText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-});

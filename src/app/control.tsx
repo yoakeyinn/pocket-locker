@@ -1,29 +1,33 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Animated,
-  StyleSheet,
+  Dimensions,
+  PanResponder,
   Text,
-  TouchableOpacity,
   View,
   ScrollView,
+  TouchableOpacity,
 } from 'react-native';
 import { router } from 'expo-router';
-import { MaterialIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { Colors } from '../constants/Colors';
+import { MaterialIcons } from '@expo/vector-icons';
 import { useBluetooth } from '../context/BluetoothContext';
+import ControlHeader from '../components/control/ControlHeader';
+import DoorTabSelector from '../components/control/DoorTabSelector';
+import DoorActionButton from '../components/control/DoorActionButton';
+import AccessInfoBanner from '../components/control/AccessInfoBanner';
+import tw from '../styles/tailwind';
 
 /**
  * Pantalla principal de control de accesos (Panel de Control).
- * Proporciona la interfaz táctil para activar los relés del portón y de la puerta peatonal.
+ * Proporciona la interfaz táctil modular para activar los relés del portón y de la puerta peatonal.
  *
  * Características:
- * - Animaciones de pulso y parpadeo de feedback según el estado de conexión y activación.
- * - Reconexión automática bajo demanda si el enlace se interrumpe.
- * - Soporte para Modo Simulación (Testing offline en Expo Go).
+ * - Arquitectura modular dividida en componentes reutilizables con estilos exclusivos Tailwind CSS.
+ * - Animaciones nativas a 60 FPS (useNativeDriver: true).
+ * - Reconexión automática bajo demanda y persistencia de última puerta utilizada.
  * - Feedback háptico nativo en cada interacción.
  */
 export default function ControlScreen() {
@@ -31,18 +35,251 @@ export default function ControlScreen() {
     status,
     deviceName,
     conectar,
+    desconectar,
     enviarComando,
-    modoSimulacion,
-    setModoSimulacion,
+    tiempoRestanteBloqueo,
+    iniciarBloqueoMargen,
+    ultimaPuerta,
+    guardarUltimaPuerta,
+    userRole,
+    permisos,
+    diasRestantes,
+    estaBloqueado,
   } = useBluetooth();
+
+  const tienePeatonal = userRole === 'admin' || (permisos ? permisos.peatonal !== false : true);
+  const tieneGaraje = userRole === 'admin' || (permisos ? permisos.garaje !== false : true);
+  const tieneAmbas = tienePeatonal && tieneGaraje;
 
   // Estado de la acción en curso ('peatonal' | 'garaje' | null)
   const [ejecutando, setEjecutando] = useState<'peatonal' | 'garaje' | null>(null);
+  const [mensajeExito, setMensajeExito] = useState<string | null>(null);
+  const [pestanaActiva, setPestanaActiva] = useState<'peatonal' | 'garaje'>(
+    !tienePeatonal && tieneGaraje ? 'garaje' : ultimaPuerta || 'peatonal'
+  );
+  const ejecutandoRef = useRef(false);
+  const pestanaInicializadaRef = useRef(false);
+  const autoDisconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const mensajeExitoTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Sincronizar con la última puerta guardada o la permitida si el contexto resuelve tras el montaje inicial
+  useEffect(() => {
+    if (!pestanaInicializadaRef.current) {
+      if (!tienePeatonal && tieneGaraje) {
+        pestanaInicializadaRef.current = true;
+        setPestanaActiva('garaje');
+      } else if (tienePeatonal && !tieneGaraje) {
+        pestanaInicializadaRef.current = true;
+        setPestanaActiva('peatonal');
+      } else if (ultimaPuerta) {
+        pestanaInicializadaRef.current = true;
+        setPestanaActiva(ultimaPuerta);
+      }
+    }
+  }, [ultimaPuerta, tienePeatonal, tieneGaraje]);
 
   // Referencias para animaciones nativas de interfaz
   const pulsePeatonal = useRef(new Animated.Value(1)).current;
+  const pulseOuterPeatonal = useRef(new Animated.Value(1)).current;
   const pulseGaraje = useRef(new Animated.Value(1)).current;
+  const pulseOuterGaraje = useRef(new Animated.Value(1)).current;
   const blinkValue = useRef(new Animated.Value(1)).current;
+  const cardEntranceAnim = useRef(new Animated.Value(0)).current;
+  const buttonPressScale = useRef(new Animated.Value(1)).current;
+  const cooldownAnim = useRef(new Animated.Value(1)).current;
+
+  // Estado de bloqueo de scroll vertical para evitar conflictos durante el swipe
+  const [scrollHabilitado, setScrollHabilitado] = useState(true);
+
+  // Valor animado para la traslación horizontal táctil de la tarjeta (swipe)
+  const panX = useRef(new Animated.Value(0)).current;
+  const isTransitioningRef = useRef(false);
+
+  // Ancho de referencia de la ventana para calcular el desplazamiento fuera de pantalla
+  const screenWidth = (Dimensions?.get ? Dimensions.get('window')?.width : 375) || 375;
+
+  // Animación de entrada de la tarjeta al montar la pantalla
+  useEffect(() => {
+    Animated.spring(cardEntranceAnim, {
+      toValue: 1,
+      friction: 6,
+      tension: 40,
+      useNativeDriver: true,
+    }).start();
+  }, [cardEntranceAnim]);
+
+  /**
+   * Transición por deslizamiento continuo a 60 FPS sin parpadeos ni pérdidas de opacidad.
+   * La tarjeta activa se traslada fuera de pantalla y la nueva entra elásticamente desde el lado contrario,
+   * permitiendo un ciclo continuo e infinito (scroll infinito bidireccional).
+   */
+  const transicionarHacia = useCallback(
+    (direccion: 'izquierda' | 'derecha', objetivo?: 'peatonal' | 'garaje') => {
+      if (isTransitioningRef.current) return;
+
+      const siguiente: 'peatonal' | 'garaje' =
+        objetivo || (pestanaActiva === 'peatonal' ? 'garaje' : 'peatonal');
+
+      if (siguiente === pestanaActiva) {
+        Animated.spring(panX, {
+          toValue: 0,
+          friction: 6,
+          tension: 60,
+          useNativeDriver: true,
+        }).start();
+        return;
+      }
+
+      isTransitioningRef.current = true;
+      Haptics.selectionAsync().catch(() => {});
+      guardarUltimaPuerta?.(siguiente)?.catch?.(() => {});
+
+      const slideDist = screenWidth + 30;
+      const exitX = direccion === 'izquierda' ? -slideDist : slideDist;
+      const enterX = -exitX;
+
+      Animated.timing(panX, {
+        toValue: exitX,
+        duration: 110,
+        useNativeDriver: true,
+      }).start(() => {
+        setPestanaActiva(siguiente);
+        panX.setValue(enterX);
+        // Desbloqueo inmediato para que swiping consecutivo responda sin retardos
+        isTransitioningRef.current = false;
+        Animated.spring(panX, {
+          toValue: 0,
+          friction: 7,
+          tension: 55,
+          useNativeDriver: true,
+        }).start();
+      });
+    },
+    [pestanaActiva, panX, screenWidth, guardarUltimaPuerta]
+  );
+
+  /**
+   * Cambia de pestaña al pulsar el selector superior DoorTabSelector.
+   */
+  const cambiarPestana = useCallback(
+    (nuevaPestana: 'peatonal' | 'garaje') => {
+      if (nuevaPestana === pestanaActiva) return;
+      const direccion = nuevaPestana === 'garaje' ? 'izquierda' : 'derecha';
+      transicionarHacia(direccion, nuevaPestana);
+    },
+    [pestanaActiva, transicionarHacia]
+  );
+
+  /**
+   * Gestor de gestos táctiles altamente sensible para deslizamiento intuitivo con scroll infinito.
+   * - Umbral reducido a 6px con tolerancia para arcos naturales del pulgar (dx > dy * 0.5).
+   * - Bloqueo de terminación por ScrollView (onPanResponderTerminationRequest: false).
+   * - Detención inmediata de animaciones previas para respuesta en swiping continuo.
+   */
+  const panResponder = useMemo(() => {
+    if (typeof PanResponder === 'undefined' || !PanResponder.create) {
+      return { panHandlers: {} };
+    }
+
+    const puedeCapturar = (gestureState: any) => {
+      if (!tieneAmbas || ejecutandoRef.current) return false;
+      const dx = Math.abs(gestureState.dx);
+      const dy = Math.abs(gestureState.dy);
+      // Intención clara de deslizamiento horizontal con tolerancia a inclinación de pulgar
+      return dx >= 6 && dx > dy * 0.5;
+    };
+
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onStartShouldSetPanResponderCapture: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => puedeCapturar(gestureState),
+      onMoveShouldSetPanResponderCapture: (_, gestureState) => puedeCapturar(gestureState),
+      onPanResponderGrant: () => {
+        panX.stopAnimation();
+        isTransitioningRef.current = false;
+        setScrollHabilitado(false);
+      },
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, gestureState) => {
+        panX.setValue(gestureState.dx);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        setScrollHabilitado(true);
+        const dx = gestureState.dx;
+        const vx = gestureState.vx;
+        const esFlick = Math.abs(vx) > 0.18;
+        const esArrastre = Math.abs(dx) > 25;
+
+        if (dx < 0 && (esFlick || esArrastre)) {
+          transicionarHacia('izquierda');
+        } else if (dx > 0 && (esFlick || esArrastre)) {
+          transicionarHacia('derecha');
+        } else {
+          Animated.spring(panX, {
+            toValue: 0,
+            friction: 6,
+            tension: 60,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        setScrollHabilitado(true);
+        Animated.spring(panX, {
+          toValue: 0,
+          friction: 6,
+          tension: 60,
+          useNativeDriver: true,
+        }).start();
+      },
+    });
+  }, [tieneAmbas, transicionarHacia, panX]);
+
+  // Efecto elástico al presionar y soltar el botón circular
+  const onPressInButton = useCallback(() => {
+    Animated.spring(buttonPressScale, {
+      toValue: 0.92,
+      speed: 50,
+      bounciness: 4,
+      useNativeDriver: true,
+    }).start();
+  }, [buttonPressScale]);
+
+  const onPressOutButton = useCallback(() => {
+    Animated.spring(buttonPressScale, {
+      toValue: 1.0,
+      speed: 30,
+      bounciness: 12,
+      useNativeDriver: true,
+    }).start();
+  }, [buttonPressScale]);
+
+  // Animación de respiración / pulso durante el enfriamiento (cooldown de 5 segundos)
+  useEffect(() => {
+    let animation: Animated.CompositeAnimation | null = null;
+    if (tiempoRestanteBloqueo > 0) {
+      animation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(cooldownAnim, {
+            toValue: 0.92,
+            duration: 500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(cooldownAnim, {
+            toValue: 1.0,
+            duration: 500,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      animation.start();
+    } else {
+      cooldownAnim.setValue(1.0);
+    }
+    return () => {
+      if (animation) animation.stop();
+    };
+  }, [tiempoRestanteBloqueo, cooldownAnim]);
 
   // Animación de parpadeo del badge cuando la conexión está en curso
   useEffect(() => {
@@ -67,20 +304,19 @@ export default function ControlScreen() {
       blinkValue.setValue(1.0);
     }
     return () => {
-      if (animation) {
-        animation.stop();
-      }
+      if (animation) animation.stop();
     };
   }, [status, blinkValue]);
 
-  // Animación de ondas expansivas (pulso) para la puerta peatonal durante su activación
+  // Ondas expansivas dobles (sonar) para la puerta peatonal durante su activación
   useEffect(() => {
-    let animation: Animated.CompositeAnimation | null = null;
+    let animInner: Animated.CompositeAnimation | null = null;
+    let animOuter: Animated.CompositeAnimation | null = null;
     if (status === 'connected' && ejecutando === 'peatonal') {
-      animation = Animated.loop(
+      animInner = Animated.loop(
         Animated.sequence([
           Animated.timing(pulsePeatonal, {
-            toValue: 1.2,
+            toValue: 1.25,
             duration: 800,
             useNativeDriver: true,
           }),
@@ -91,23 +327,41 @@ export default function ControlScreen() {
           }),
         ])
       );
-      animation.start();
+      animOuter = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseOuterPeatonal, {
+            toValue: 1.5,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseOuterPeatonal, {
+            toValue: 1.0,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      animInner.start();
+      animOuter.start();
     } else {
       pulsePeatonal.setValue(1.0);
+      pulseOuterPeatonal.setValue(1.0);
     }
     return () => {
-      if (animation) animation.stop();
+      if (animInner) animInner.stop();
+      if (animOuter) animOuter.stop();
     };
-  }, [status, ejecutando, pulsePeatonal]);
+  }, [status, ejecutando, pulsePeatonal, pulseOuterPeatonal]);
 
-  // Animación de ondas expansivas (pulso) para el garaje durante su activación
+  // Ondas expansivas dobles (sonar) para el garaje durante su activación
   useEffect(() => {
-    let animation: Animated.CompositeAnimation | null = null;
+    let animInner: Animated.CompositeAnimation | null = null;
+    let animOuter: Animated.CompositeAnimation | null = null;
     if (status === 'connected' && ejecutando === 'garaje') {
-      animation = Animated.loop(
+      animInner = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseGaraje, {
-            toValue: 1.2,
+            toValue: 1.25,
             duration: 800,
             useNativeDriver: true,
           }),
@@ -118,24 +372,43 @@ export default function ControlScreen() {
           }),
         ])
       );
-      animation.start();
+      animOuter = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseOuterGaraje, {
+            toValue: 1.5,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseOuterGaraje, {
+            toValue: 1.0,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      animInner.start();
+      animOuter.start();
     } else {
       pulseGaraje.setValue(1.0);
+      pulseOuterGaraje.setValue(1.0);
     }
     return () => {
-      if (animation) animation.stop();
+      if (animInner) animInner.stop();
+      if (animOuter) animOuter.stop();
     };
-  }, [status, ejecutando, pulseGaraje]);
+  }, [status, ejecutando, pulseGaraje, pulseOuterGaraje]);
 
   /**
    * Manejador de evento al presionar cualquiera de los pulsadores de apertura.
-   * Realiza validaciones previas de estado, conexión y permisos antes de transmitir.
    */
   const handleAbrir = useCallback(
     async (tipo: 'peatonal' | 'garaje', comando: string) => {
-      if (ejecutando) return;
-      Haptics.selectionAsync().catch(() => {});
+      if (ejecutandoRef.current || ejecutando !== null || tiempoRestanteBloqueo > 0) {
+        return;
+      }
+      ejecutandoRef.current = true;
       setEjecutando(tipo);
+      Haptics.selectionAsync().catch(() => {});
 
       try {
         if (status === 'unpaired') {
@@ -144,10 +417,7 @@ export default function ControlScreen() {
             'No hay un dispositivo vinculado. Vincula uno primero.',
             [
               { text: 'Cancelar', style: 'cancel' },
-              {
-                text: 'Vincular',
-                onPress: () => router.replace('/(tabs)'),
-              },
+              { text: 'Vincular', onPress: () => router.replace('/(tabs)') },
             ]
           );
           return;
@@ -166,7 +436,6 @@ export default function ControlScreen() {
           return;
         }
 
-        // Si el enlace está desconectado, intentamos conectar previamente
         if (status !== 'connected') {
           try {
             await conectar();
@@ -179,394 +448,219 @@ export default function ControlScreen() {
           }
         }
 
-        // Transmisión de comando seguro
+        if (estaBloqueado) {
+          Alert.alert(
+            'Acceso bloqueado',
+            'Tu acceso está bloqueado o tus días de validez han expirado. Contacta con el administrador del Pocket Locker.'
+          );
+          return;
+        }
+
         try {
           await enviarComando(comando);
-          router.push(`/resultado?exito=true&tipo=${tipo}`);
+          guardarUltimaPuerta?.(tipo)?.catch?.(() => {});
+          iniciarBloqueoMargen(5);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+          setMensajeExito(
+            tipo === 'garaje' ? '¡Portón de garaje abriéndose!' : '¡Puerta peatonal abriéndose!'
+          );
+
+          // Limpiar mensaje tras el período de cooldown
+          if (mensajeExitoTimerRef.current) clearTimeout(mensajeExitoTimerRef.current);
+          mensajeExitoTimerRef.current = setTimeout(() => {
+            setMensajeExito(null);
+          }, 4500);
+
+          // Desconexión automática óptima:
+          // Tras confirmar la orden en el ESP32, liberamos el enlace Bluetooth (1.5s)
+          // para que cualquier otro usuario pueda conectarse de inmediato.
+          if (autoDisconnectTimerRef.current) clearTimeout(autoDisconnectTimerRef.current);
+          autoDisconnectTimerRef.current = setTimeout(() => {
+            desconectar?.()?.catch?.(() => {});
+          }, 1500);
         } catch (err: any) {
           const mensajeError = err?.message || 'No se pudo enviar el comando.';
-          router.push({
-            pathname: '/resultado',
-            params: { exito: 'false', tipo, mensajeError },
-          });
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+          Alert.alert('No se pudo abrir', mensajeError);
+          desconectar?.()?.catch?.(() => {});
         }
       } catch (e: any) {
         Alert.alert('Error', e?.message || 'Ocurrió un error inesperado');
       } finally {
+        ejecutandoRef.current = false;
         setEjecutando(null);
       }
     },
-    [ejecutando, status, conectar, enviarComando]
+    [ejecutando, tiempoRestanteBloqueo, estaBloqueado, status, conectar, enviarComando, iniciarBloqueoMargen, guardarUltimaPuerta, desconectar]
   );
 
   const onVolver = useCallback(() => {
+    if (autoDisconnectTimerRef.current) clearTimeout(autoDisconnectTimerRef.current);
+    if (mensajeExitoTimerRef.current) clearTimeout(mensajeExitoTimerRef.current);
+    desconectar?.()?.catch?.(() => {});
     router.replace('/(tabs)');
-  }, []);
+  }, [desconectar]);
+
+  // Desconectar al desmontar la pantalla de control para liberar el locker a otros usuarios
+  useEffect(() => {
+    return () => {
+      if (autoDisconnectTimerRef.current) clearTimeout(autoDisconnectTimerRef.current);
+      if (mensajeExitoTimerRef.current) clearTimeout(mensajeExitoTimerRef.current);
+      desconectar?.()?.catch?.(() => {});
+    };
+  }, [desconectar]);
+
+  // Temporizador de inactividad: si el usuario permanece en la pantalla 25s conectado sin accionar,
+  // desconectar preventivamente para no acaparar el canal Bluetooth del ESP32.
+  useEffect(() => {
+    if (status !== 'connected' || ejecutando !== null || tiempoRestanteBloqueo > 0) return;
+
+    const timerInactividad = setTimeout(() => {
+      desconectar?.()?.catch?.(() => {});
+    }, 25000);
+
+    return () => {
+      clearTimeout(timerInactividad);
+    };
+  }, [status, ejecutando, tiempoRestanteBloqueo, desconectar]);
+
+  const botonDeshabilitado = estaBloqueado || ejecutando !== null || tiempoRestanteBloqueo > 0;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {modoSimulacion && (
-        <TouchableOpacity
-          onPress={() => setModoSimulacion(false)}
-          style={styles.bannerSimulacion}
-          activeOpacity={0.9}
-        >
-          <Text style={styles.bannerSimulacionTexto}>
-            Modo Demo Activo (Toca para desactivar)
+    <SafeAreaView style={tw`flex-1 bg-beige-bg`} edges={['top']}>
+      {/* Header modular */}
+      <ControlHeader
+        onVolver={onVolver}
+        status={status}
+        deviceName={deviceName}
+        blinkValue={blinkValue}
+      />
+
+      <ScrollView scrollEnabled={scrollHabilitado} contentContainerStyle={tw`p-5 pb-10 flex-grow`}>
+        {/* Título de la pantalla */}
+        <View style={tw`items-center mb-6`}>
+          <Text style={tw`text-2xl font-bold text-azul-oscuro text-center`}>Panel de Control</Text>
+          <Text style={tw`text-sm text-texto-secundario text-center mt-1`}>
+            Selecciona el acceso que deseas abrir
           </Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={onVolver}
-          style={styles.btnVolver}
-          activeOpacity={0.7}
-        >
-          <MaterialIcons name="arrow-back" size={24} color={Colors.azulOscuro} />
-        </TouchableOpacity>
-
-        <StatusBadge status={status} deviceName={deviceName} blinkValue={blinkValue} />
-
-        <TouchableOpacity
-          testID="simulacion-toggle"
-          onPress={() => setModoSimulacion(!modoSimulacion)}
-          style={styles.btnSimulacion}
-          activeOpacity={0.7}
-        >
-          <MaterialIcons
-            name={modoSimulacion ? 'bug-report' : 'developer-mode'}
-            size={22}
-            color={modoSimulacion ? Colors.errorRojo : Colors.textoSecundario}
-          />
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.titleContainer}>
-          <Text style={styles.title}>Panel de Control</Text>
-          <Text style={styles.subtitle}>Selecciona el acceso que deseas abrir</Text>
         </View>
 
-        {/* Card Peatonal */}
-        <View style={styles.controlCard}>
-          <View style={styles.cardHeader}>
-            <View style={styles.iconContainer}>
-              <MaterialIcons name="door-front" size={28} color={Colors.azulPrimario} />
-            </View>
-            <View style={styles.cardInfo}>
-              <Text style={styles.cardTitle}>Puerta Peatonal</Text>
-              <Text style={styles.cardDesc}>Puerta de entrada peatonal del edificio</Text>
-            </View>
-          </View>
+        {/* Banners informativos de caducidad/días */}
+        <AccessInfoBanner estaBloqueado={estaBloqueado} diasRestantes={diasRestantes} />
 
-          <View style={styles.buttonWrapper}>
-            {ejecutando === 'peatonal' && (
-              <Animated.View
-                style={[
-                  styles.pulseRing,
+        {/* Selector de pestañas */}
+        <DoorTabSelector
+          pestanaActiva={pestanaActiva}
+          onSelect={cambiarPestana}
+          tieneAmbas={tieneAmbas}
+        />
+
+        {/* Notificación de confirmación de apertura en pantalla */}
+        {mensajeExito && (
+          <View
+            testID="banner-exito-apertura"
+            style={tw`flex-row items-center justify-center bg-emerald-50 border border-emerald-300 rounded-2xl px-4 py-3 my-2 shadow-sm`}
+          >
+            <MaterialIcons name="check-circle" size={22} color="#10B981" />
+            <Text style={tw`text-emerald-900 font-bold text-sm ml-2.5`}>
+              {mensajeExito}
+            </Text>
+          </View>
+        )}
+
+        {/* Superficie táctil interactiva con PanResponder para swipe horizontal infinito */}
+        <View style={tw`w-full overflow-hidden py-1`} {...panResponder.panHandlers}>
+          <Animated.View
+            style={[
+              tw`w-full`,
+              {
+                opacity: cardEntranceAnim,
+                transform: [
+                  { translateX: panX },
                   {
-                    transform: [{ scale: pulsePeatonal }],
-                    opacity: pulsePeatonal.interpolate({
-                      inputRange: [1, 1.2],
-                      outputRange: [0.4, 0],
+                    scale: cardEntranceAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0.94, 1],
                     }),
                   },
-                ]}
+                ],
+              },
+            ]}
+          >
+            {pestanaActiva === 'peatonal' ? (
+              <DoorActionButton
+                tipo="peatonal"
+                ejecutando={ejecutando}
+                tiempoRestanteBloqueo={tiempoRestanteBloqueo}
+                botonDeshabilitado={botonDeshabilitado}
+                onPress={() => handleAbrir('peatonal', 'P')}
+                onPressIn={onPressInButton}
+                onPressOut={onPressOutButton}
+                buttonPressScale={buttonPressScale}
+                cooldownAnim={cooldownAnim}
+                pulseInner={pulsePeatonal}
+                pulseOuter={pulseOuterPeatonal}
+              />
+            ) : (
+              <DoorActionButton
+                tipo="garaje"
+                ejecutando={ejecutando}
+                tiempoRestanteBloqueo={tiempoRestanteBloqueo}
+                botonDeshabilitado={botonDeshabilitado}
+                onPress={() => handleAbrir('garaje', 'G')}
+                onPressIn={onPressInButton}
+                onPressOut={onPressOutButton}
+                buttonPressScale={buttonPressScale}
+                cooldownAnim={cooldownAnim}
+                pulseInner={pulseGaraje}
+                pulseOuter={pulseOuterGaraje}
               />
             )}
-            <TouchableOpacity
-              testID="btn-peatonal"
-              style={[
-                styles.btnCircular,
-                ejecutando === 'peatonal' && styles.btnCircularActive,
-                status !== 'connected' && styles.btnCircularOffline,
-              ]}
-              onPress={() => handleAbrir('peatonal', 'E')}
-              disabled={ejecutando !== null}
-              activeOpacity={0.8}
-            >
-              {ejecutando === 'peatonal' ? (
-                <ActivityIndicator color="#FFFFFF" size="large" />
-              ) : (
-                <MaterialIcons name="door-front" size={40} color="#FFFFFF" />
-              )}
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.btnHint}>Pulsar para abrir</Text>
-        </View>
+          </Animated.View>
 
-        {/* Card Garaje */}
-        <View style={styles.controlCard}>
-          <View style={styles.cardHeader}>
-            <View style={styles.iconContainer}>
-              <MaterialIcons name="garage" size={28} color={Colors.azulPrimario} />
-            </View>
-            <View style={styles.cardInfo}>
-              <Text style={styles.cardTitle}>Portón de Garaje</Text>
-              <Text style={styles.cardDesc}>Portón automático para entrada de vehículos</Text>
-            </View>
-          </View>
+          {/* Indicador visual de carrusel interactivo y deslizamiento infinito */}
+          {tieneAmbas && (
+            <View style={tw`flex-row items-center justify-center mt-5 gap-2`}>
+              <TouchableOpacity
+                onPress={() => transicionarHacia('derecha')}
+                style={tw`p-1.5`}
+                activeOpacity={0.7}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <MaterialIcons name="chevron-left" size={20} color="#2C5F8A" style={tw`opacity-40`} />
+              </TouchableOpacity>
 
-          <View style={styles.buttonWrapper}>
-            {ejecutando === 'garaje' && (
-              <Animated.View
-                style={[
-                  styles.pulseRing,
-                  {
-                    transform: [{ scale: pulseGaraje }],
-                    opacity: pulseGaraje.interpolate({
-                      inputRange: [1, 1.2],
-                      outputRange: [0.4, 0],
-                    }),
-                  },
-                ]}
-              />
-            )}
-            <TouchableOpacity
-              testID="btn-garaje"
-              style={[
-                styles.btnCircular,
-                ejecutando === 'garaje' && styles.btnCircularActive,
-                status !== 'connected' && styles.btnCircularOffline,
-              ]}
-              onPress={() => handleAbrir('garaje', 'H')}
-              disabled={ejecutando !== null}
-              activeOpacity={0.8}
-            >
-              {ejecutando === 'garaje' ? (
-                <ActivityIndicator color="#FFFFFF" size="large" />
-              ) : (
-                <MaterialIcons name="garage" size={40} color="#FFFFFF" />
-              )}
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.btnHint}>Pulsar para abrir</Text>
+              <View style={tw`flex-row items-center gap-1.5 px-2`}>
+                <View
+                  style={[
+                    tw`rounded-full`,
+                    pestanaActiva === 'peatonal'
+                      ? tw`w-5 h-1.5 bg-azul-primario`
+                      : tw`w-1.5 h-1.5 bg-stone-300`,
+                  ]}
+                />
+                <View
+                  style={[
+                    tw`rounded-full`,
+                    pestanaActiva === 'garaje'
+                      ? tw`w-5 h-1.5 bg-azul-primario`
+                      : tw`w-1.5 h-1.5 bg-stone-300`,
+                  ]}
+                />
+              </View>
+
+              <TouchableOpacity
+                onPress={() => transicionarHacia('izquierda')}
+                style={tw`p-1.5`}
+                activeOpacity={0.7}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <MaterialIcons name="chevron-right" size={20} color="#2C5F8A" style={tw`opacity-40`} />
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
-
-// Subcomponente de estado
-interface StatusBadgeProps {
-  status: string;
-  deviceName: string | null;
-  blinkValue: Animated.Value;
-}
-
-const StatusBadge = React.memo(({ status, deviceName, blinkValue }: StatusBadgeProps) => {
-  let badgeBg = '#EAEAEA';
-  let badgeText = 'Desconectado';
-  let iconColor = '#888888';
-  let labelColor = '#666666';
-  let showLoading = false;
-
-  switch (status) {
-    case 'connected':
-      badgeBg = '#E2F3E1';
-      badgeText = deviceName ? `${deviceName}` : 'Conectado';
-      iconColor = Colors.exitoVerde;
-      labelColor = Colors.exitoVerde;
-      break;
-    case 'connecting':
-      badgeBg = '#FFF4E5';
-      badgeText = 'Conectando...';
-      iconColor = '#FF9800';
-      labelColor = '#B26A00';
-      showLoading = true;
-      break;
-    case 'disabled':
-      badgeBg = '#FCE8E6';
-      badgeText = 'Bluetooth apagado';
-      iconColor = Colors.errorRojo;
-      labelColor = Colors.errorRojo;
-      break;
-    case 'unauthorized':
-      badgeBg = '#FCE8E6';
-      badgeText = 'Sin permisos';
-      iconColor = Colors.errorRojo;
-      labelColor = Colors.errorRojo;
-      break;
-    case 'unpaired':
-      badgeBg = '#FCE8E6';
-      badgeText = 'Sin vincular';
-      iconColor = Colors.errorRojo;
-      labelColor = Colors.errorRojo;
-      break;
-  }
-
-  return (
-    <Animated.View style={{ opacity: blinkValue }}>
-      <View style={[styles.badge, { backgroundColor: badgeBg }]}>
-        {showLoading ? (
-          <ActivityIndicator size="small" color={iconColor} style={styles.badgeIcon} />
-        ) : (
-          <MaterialIcons
-            name={status === 'connected' ? 'bluetooth-connected' : 'bluetooth'}
-            size={14}
-            color={iconColor}
-            style={styles.badgeIcon}
-          />
-        )}
-        <Text style={[styles.badgeLabel, { color: labelColor }]}>{badgeText}</Text>
-      </View>
-    </Animated.View>
-  );
-});
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.beigeBg,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 8,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.04)',
-  },
-  btnVolver: {
-    padding: 8,
-  },
-  btnSimulacion: {
-    padding: 8,
-  },
-  badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 5,
-    paddingHorizontal: 10,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.03)',
-  },
-  badgeIcon: {
-    marginRight: 4,
-  },
-  badgeLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  bannerSimulacion: {
-    backgroundColor: '#FFE0B2',
-    paddingVertical: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '100%',
-  },
-  bannerSimulacionTexto: {
-    color: '#E65100',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  scrollContent: {
-    padding: 20,
-    alignItems: 'stretch',
-    gap: 20,
-  },
-  titleContainer: {
-    marginBottom: 8,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: Colors.azulOscuro,
-  },
-  subtitle: {
-    fontSize: 13,
-    color: Colors.textoSecundario,
-    marginTop: 4,
-  },
-  controlCard: {
-    backgroundColor: Colors.beigeCard,
-    borderRadius: 16,
-    padding: 16,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.03,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.01)',
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'stretch',
-    marginBottom: 16,
-  },
-  iconContainer: {
-    backgroundColor: '#EAE7DF',
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.azulOscuro,
-  },
-  cardDesc: {
-    fontSize: 12,
-    color: Colors.textoSecundario,
-    marginTop: 2,
-  },
-  buttonWrapper: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 120,
-    height: 120,
-    position: 'relative',
-    marginVertical: 8,
-  },
-  btnCircular: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: Colors.azulPrimario,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: Colors.azulPrimario,
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  btnCircularActive: {
-    backgroundColor: Colors.azulOscuro,
-    shadowColor: Colors.azulOscuro,
-  },
-  btnCircularOffline: {
-    backgroundColor: '#9A9A9A',
-    shadowColor: '#9A9A9A',
-  },
-  pulseRing: {
-    position: 'absolute',
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: Colors.azulPrimario,
-  },
-  btnHint: {
-    fontSize: 11,
-    color: Colors.textoSecundario,
-    fontWeight: '600',
-    marginTop: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-});

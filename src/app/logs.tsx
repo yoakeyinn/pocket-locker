@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
   FlatList,
-  StyleSheet,
   Text,
   TouchableOpacity,
   View,
@@ -12,19 +11,19 @@ import { router } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LogService, { LogEntry } from '../services/LogService';
-import { Colors } from '../constants/Colors';
+import tw from '../styles/tailwind';
 
 /**
  * Pantalla de Diagnóstico y Visor de Registros (Logs).
  * Permite a desarrolladores y técnicos inspeccionar en tiempo real las operaciones
  * Bluetooth, cambios de estado, tramas enviadas y posibles errores del sistema.
+ * Estilizado exclusivamente con Tailwind CSS.
  */
 export default function LogsScreen() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [modoTextoCopiar, setModoTextoCopiar] = useState(false);
 
   useEffect(() => {
-    // Suscripción reactiva al servicio central de logging
     const unsubscribe = LogService.subscribe((currentLogs) => {
       setLogs(currentLogs);
     });
@@ -55,29 +54,35 @@ export default function LogsScreen() {
   };
 
   const renderLogItem = ({ item }: { item: LogEntry }) => {
-    let color = '#555555';
-    let bg = '#F5F5F5';
+    let textColor = 'text-stone-700';
+    let borderColor = 'border-stone-300';
+    let bgColor = 'bg-stone-50';
+
     if (item.level === 'warn') {
-      color = '#B26A00';
-      bg = '#FFF4E5';
+      textColor = 'text-amber-800';
+      borderColor = 'border-amber-300';
+      bgColor = 'bg-amber-50';
     } else if (item.level === 'error') {
-      color = Colors.errorRojo;
-      bg = '#FCE8E6';
+      textColor = 'text-error-rojo';
+      borderColor = 'border-red-300';
+      bgColor = 'bg-red-50';
     }
+
+    const timeStr = (item.timestamp.includes('T') ? item.timestamp.split('T')[1] : item.timestamp).slice(0, 8);
 
     return (
       <TouchableOpacity
-        style={[styles.logItem, { backgroundColor: bg }]}
+        style={tw`p-3.5 rounded-2xl mb-2.5 border border-stone-200/70 shadow-xs ${bgColor}`}
         onPress={() => verDetalle(item)}
         activeOpacity={0.7}
       >
-        <View style={styles.logMeta}>
-          <Text style={[styles.logTime, { color }]}>{item.timestamp.split('T')[1].slice(0, 8)}</Text>
-          <Text style={[styles.logLevel, { color, borderColor: color }]}>
-            {item.level.toUpperCase()}
-          </Text>
+        <View style={tw`flex-row items-center justify-between mb-1.5`}>
+          <Text style={tw`text-2xs font-mono font-bold text-texto-secundario`}>{timeStr}</Text>
+          <View style={tw`px-2 py-0.5 rounded-md border ${borderColor}`}>
+            <Text style={tw`text-2xs font-extrabold uppercase ${textColor}`}>{item.level}</Text>
+          </View>
         </View>
-        <Text style={[styles.logMessage, { color }]} numberOfLines={2}>
+        <Text style={tw`text-xs font-medium ${textColor} leading-4`} numberOfLines={2}>
           {item.message}
         </Text>
       </TouchableOpacity>
@@ -85,38 +90,49 @@ export default function LogsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.btnHeader} activeOpacity={0.7}>
-          <MaterialIcons name="arrow-back" size={24} color={Colors.azulOscuro} />
+    <SafeAreaView style={tw`flex-1 bg-beige-bg`} edges={['top', 'bottom']}>
+      {/* Header */}
+      <View style={tw`flex-row items-center justify-between px-5 py-3.5 bg-beige-bg border-b border-stone-200/60`}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={tw`w-10 h-10 items-center justify-center rounded-xl bg-white shadow-sm border border-stone-200`}
+          activeOpacity={0.7}
+        >
+          <MaterialIcons name="arrow-back" size={22} color="#1A3A5C" />
         </TouchableOpacity>
-        <Text style={styles.tituloHeader}>Diagnóstico</Text>
-        <View style={styles.headerActions}>
+
+        <Text style={tw`text-lg font-bold text-azul-oscuro`}>Diagnóstico</Text>
+
+        <View style={tw`flex-row items-center gap-2`}>
           <TouchableOpacity
             onPress={() => setModoTextoCopiar(!modoTextoCopiar)}
-            style={styles.btnAction}
+            style={tw`w-10 h-10 items-center justify-center rounded-xl bg-white shadow-sm border border-stone-200`}
             activeOpacity={0.7}
           >
             <MaterialIcons
               name={modoTextoCopiar ? 'list' : 'content-copy'}
-              size={22}
-              color={Colors.azulPrimario}
+              size={20}
+              color="#2C5F8A"
             />
           </TouchableOpacity>
-          <TouchableOpacity onPress={handleClear} style={styles.btnAction} activeOpacity={0.7}>
-            <MaterialIcons name="delete-sweep" size={22} color={Colors.errorRojo} />
+          <TouchableOpacity
+            onPress={handleClear}
+            style={tw`w-10 h-10 items-center justify-center rounded-xl bg-white shadow-sm border border-stone-200`}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="delete-sweep" size={22} color="#E85D5D" />
           </TouchableOpacity>
         </View>
       </View>
 
-      <View style={styles.content}>
+      <View style={tw`flex-1 p-5`}>
         {modoTextoCopiar ? (
-          <View style={styles.textContainer}>
-            <Text style={styles.textHelp}>
+          <View style={tw`flex-1`}>
+            <Text style={tw`text-xs text-texto-secundario mb-3 leading-4`}>
               Mantén pulsado el texto de abajo para seleccionar y copiar todos los logs:
             </Text>
             <TextInput
-              style={styles.textInput}
+              style={tw`flex-1 p-4 bg-stone-900 text-green-400 font-mono text-xs rounded-2xl border border-stone-700`}
               multiline
               editable={false}
               selectTextOnFocus
@@ -128,11 +144,16 @@ export default function LogsScreen() {
             data={logs}
             keyExtractor={(item, index) => `${item.timestamp}-${index}`}
             renderItem={renderLogItem}
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={logs.length === 0 ? tw`flex-grow justify-center` : tw`pb-6`}
             ListEmptyComponent={
-              <View style={styles.emptyContainer}>
-                <MaterialIcons name="receipt" size={48} color="#CCCCCC" />
-                <Text style={styles.emptyText}>No hay logs registrados en esta sesión.</Text>
+              <View style={tw`items-center justify-center py-16 px-6 bg-beige-card rounded-3xl border border-dashed border-stone-300`}>
+                <MaterialIcons name="receipt" size={44} color="#6B6B6B" />
+                <Text style={tw`text-base font-bold text-azul-oscuro text-center mt-3`}>
+                  No hay logs registrados
+                </Text>
+                <Text style={tw`text-xs text-texto-secundario text-center mt-1`}>
+                  Las operaciones Bluetooth y eventos del sistema se registrarán aquí en tiempo real.
+                </Text>
               </View>
             }
           />
@@ -141,101 +162,3 @@ export default function LogsScreen() {
     </SafeAreaView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.beigeBg,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#EAEAEA',
-    backgroundColor: '#FFFFFF',
-  },
-  btnHeader: {
-    padding: 4,
-  },
-  tituloHeader: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: Colors.azulOscuro,
-  },
-  headerActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  btnAction: {
-    padding: 6,
-  },
-  content: {
-    flex: 1,
-  },
-  listContent: {
-    padding: 16,
-    gap: 8,
-  },
-  logItem: {
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#EAEAEA',
-  },
-  logMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 4,
-  },
-  logTime: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  logLevel: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    borderWidth: 1,
-    borderRadius: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  logMessage: {
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 60,
-    gap: 12,
-  },
-  emptyText: {
-    color: '#888888',
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  textContainer: {
-    flex: 1,
-    padding: 16,
-  },
-  textHelp: {
-    color: Colors.textoSecundario,
-    fontSize: 12,
-    marginBottom: 8,
-  },
-  textInput: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#EAEAEA',
-    fontFamily: 'monospace',
-    fontSize: 11,
-    textAlignVertical: 'top',
-  },
-});

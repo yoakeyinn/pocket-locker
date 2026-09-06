@@ -1,4 +1,3 @@
-console.log('[POLYFILL] Registrando DOMException y Performance APIs...');
 if (typeof global.DOMException === 'undefined') {
   global.DOMException = Error;
 }
