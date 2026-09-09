@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react-native';
-import { useBluetooth } from '../../context/BluetoothContext';
+import { useBluetooth } from '../../services/BluetoothService';
 import ControlScreen from '../control';
 
 // Mock de react-native con elementos de host estándar
@@ -33,6 +33,9 @@ jest.mock('react-native', () => {
       spring: jest.fn().mockImplementation(() => ({
         start: jest.fn((cb) => cb && cb({ finished: true })),
       })),
+      delay: jest.fn().mockImplementation(() => ({
+        start: jest.fn((cb) => cb && cb({ finished: true })),
+      })),
       sequence: jest.fn().mockImplementation(() => ({
         start: jest.fn((cb) => cb && cb({ finished: true })),
         stop: jest.fn(),
@@ -47,9 +50,17 @@ jest.mock('react-native', () => {
       })),
       View: (props: any) => React.createElement('View', props, props.children),
     },
+    Easing: {
+      out: jest.fn((fn) => fn),
+      ease: jest.fn(),
+      quad: jest.fn(),
+      linear: jest.fn(),
+      in: jest.fn((fn) => fn),
+      inOut: jest.fn((fn) => fn),
+    },
     StyleSheet: {
       create: (styles: any) => styles,
-      flatten: (styles: any) => Array.isArray(styles) ? Object.assign({}, ...styles) : styles || {},
+      flatten: (styles: any) => (Array.isArray(styles) ? Object.assign({}, ...styles) : styles || {}),
     },
     Platform: {
       OS: 'ios',
@@ -65,6 +76,10 @@ jest.mock('react-native', () => {
     },
     Alert: {
       alert: jest.fn(),
+    },
+    AppState: {
+      addEventListener: jest.fn().mockReturnValue({ remove: jest.fn() }),
+      currentState: 'active',
     },
   };
 });
@@ -89,8 +104,11 @@ jest.mock('expo-haptics', () => ({
 }));
 
 // Mock de useBluetooth
-jest.mock('../../context/BluetoothContext', () => ({
+jest.mock('../../services/BluetoothService', () => ({
+  __esModule: true,
   useBluetooth: jest.fn(),
+  BluetoothService: {},
+  default: {},
 }));
 
 // Mock de react-native-bluetooth-classic
@@ -115,10 +133,29 @@ jest.mock('@expo/vector-icons', () => {
   const React = require('react');
   return {
     MaterialIcons: (props: any) => React.createElement('Text', null, props.name),
+    FontAwesome5: (props: any) => React.createElement('Text', null, props.name),
   };
 });
 
-describe('Unified ControlScreen', () => {
+// Mock de StorageService
+jest.mock('../../services/StorageService', () => ({
+  __esModule: true,
+  default: {
+    getUltimaPuerta: jest.fn().mockResolvedValue('peatonal'),
+    saveUltimaPuerta: jest.fn().mockResolvedValue(undefined),
+  },
+  StorageService: {
+    getUltimaPuerta: jest.fn().mockResolvedValue('peatonal'),
+    saveUltimaPuerta: jest.fn().mockResolvedValue(undefined),
+  },
+  LogService: {
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  },
+}));
+
+describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
   const mockConectar = jest.fn();
   const mockDesconectar = jest.fn().mockResolvedValue(undefined);
   const mockEnviarComando = jest.fn();
@@ -138,10 +175,6 @@ describe('Unified ControlScreen', () => {
       iniciarBloqueoMargen: mockIniciarBloqueoMargen,
       ultimaPuerta: 'peatonal',
       guardarUltimaPuerta: mockGuardarUltimaPuerta,
-      userRole: 'admin',
-      permisos: { peatonal: true, garaje: true },
-      diasRestantes: null,
-      estaBloqueado: false,
     });
   });
 
@@ -168,7 +201,7 @@ describe('Unified ControlScreen', () => {
     expect(mockIniciarBloqueoMargen).toHaveBeenCalledWith(5);
   });
 
-  it('debería alternar entre pantallas/pestañas de peatonal y garaje', async () => {
+  it('debería alternar entre accesos al pulsar las pestañas del selector', async () => {
     const { getByTestId, queryByTestId } = await render(<ControlScreen />);
 
     expect(getByTestId('btn-peatonal')).toBeTruthy();
@@ -209,10 +242,8 @@ describe('Unified ControlScreen', () => {
       enviarComando: mockEnviarComando,
       tiempoRestanteBloqueo: 0,
       iniciarBloqueoMargen: mockIniciarBloqueoMargen,
-      userRole: 'admin',
-      permisos: { peatonal: true, garaje: true },
-      diasRestantes: null,
-      estaBloqueado: false,
+      ultimaPuerta: 'peatonal',
+      guardarUltimaPuerta: mockGuardarUltimaPuerta,
     });
 
     const { getByTestId } = await render(<ControlScreen />);
@@ -226,7 +257,7 @@ describe('Unified ControlScreen', () => {
     expect(mockEnviarComando).toHaveBeenCalledWith('P');
   });
 
-  it('debería deshabilitar los botones cuando hay margen de tiempo activo', async () => {
+  it('debería deshabilitar los botones cuando hay margen de exclusión mutua activo (5s)', async () => {
     (useBluetooth as jest.Mock).mockReturnValue({
       status: 'connected',
       deviceName: 'Locker Test',
@@ -235,6 +266,8 @@ describe('Unified ControlScreen', () => {
       enviarComando: mockEnviarComando,
       tiempoRestanteBloqueo: 5,
       iniciarBloqueoMargen: mockIniciarBloqueoMargen,
+      ultimaPuerta: 'peatonal',
+      guardarUltimaPuerta: mockGuardarUltimaPuerta,
     });
 
     const { getByTestId, getByText } = await render(<ControlScreen />);
@@ -251,7 +284,7 @@ describe('Unified ControlScreen', () => {
     expect(btnGaraje.props.onPress).toBeUndefined();
   });
 
-  it('debería iniciar por defecto en la pestaña de garaje si ultimaPuerta es garaje', async () => {
+  it('debería iniciar por defecto en garaje si ultimaPuerta es garaje', async () => {
     (useBluetooth as jest.Mock).mockReturnValue({
       status: 'connected',
       deviceName: 'Locker Test',
@@ -270,16 +303,6 @@ describe('Unified ControlScreen', () => {
     expect(queryByTestId('btn-peatonal')).toBeNull();
   });
 
-  it('debería guardar la última puerta al alternar pestañas', async () => {
-    const { getByTestId } = await render(<ControlScreen />);
-
-    await act(async () => {
-      fireEvent.press(getByTestId('tab-garaje'));
-    });
-
-    expect(mockGuardarUltimaPuerta).toHaveBeenCalledWith('garaje');
-  });
-
   it('debería alternar a garaje y persistir ultimaPuerta al deslizar a la izquierda (swipe left)', async () => {
     const { PanResponder } = require('react-native');
     const { getByTestId, queryByTestId } = await render(<ControlScreen />);
@@ -287,15 +310,12 @@ describe('Unified ControlScreen', () => {
     expect(getByTestId('btn-peatonal')).toBeTruthy();
     expect(queryByTestId('btn-garaje')).toBeNull();
 
-    // Obtener la configuración del PanResponder instanciado
     const lastCall = (PanResponder.create as jest.Mock).mock.results.slice(-1)[0];
     const config = lastCall.value._config;
 
-    // Verificar que el gesto horizontal se captura y el vertical se ignora
     expect(config.onMoveShouldSetPanResponder({}, { dx: -30, dy: 5 })).toBe(true);
     expect(config.onMoveShouldSetPanResponder({}, { dx: 5, dy: 30 })).toBe(false);
 
-    // Simular lanzamiento de swipe hacia la izquierda
     await act(async () => {
       config.onPanResponderRelease({}, { dx: -60, vx: -0.5 });
     });
@@ -318,8 +338,6 @@ describe('Unified ControlScreen', () => {
       iniciarBloqueoMargen: mockIniciarBloqueoMargen,
       ultimaPuerta: 'garaje',
       guardarUltimaPuerta: mockGuardarUltimaPuerta,
-      userRole: 'admin',
-      permisos: { peatonal: true, garaje: true },
     });
 
     const { getByTestId, queryByTestId } = await render(<ControlScreen />);
@@ -330,7 +348,6 @@ describe('Unified ControlScreen', () => {
     const lastCall = (PanResponder.create as jest.Mock).mock.results.slice(-1)[0];
     const config = lastCall.value._config;
 
-    // Simular swipe hacia la derecha desde garaje -> vuelve a peatonal en bucle infinito
     await act(async () => {
       config.onPanResponderRelease({}, { dx: 60, vx: 0.5 });
     });
@@ -362,5 +379,26 @@ describe('Unified ControlScreen', () => {
       unmount();
     });
     expect(mockDesconectar).toHaveBeenCalled();
+  });
+
+  it('debería navegar a ajustes al presionar el botón de ajustes de la cabecera', async () => {
+    const { router } = require('expo-router');
+    const { getByTestId } = await render(<ControlScreen />);
+
+    const btnAjustes = getByTestId('btn-header-ajustes');
+    expect(btnAjustes).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.press(btnAjustes);
+    });
+
+    expect(router.push).toHaveBeenCalledWith('/ajustes');
+  });
+
+  it('no debería contener la palabra "Abrir" dentro del botón, manteniendo "Pulsar para abrir" debajo', async () => {
+    const { getByText, queryByText } = await render(<ControlScreen />);
+
+    expect(getByText('Pulsar para abrir')).toBeTruthy();
+    expect(queryByText('Abrir')).toBeNull();
   });
 });

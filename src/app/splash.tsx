@@ -2,46 +2,31 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useBluetooth } from '../context/BluetoothContext';
-import tw from '../styles/tailwind';
+import { useBluetooth } from '../services/BluetoothService';
+import tw, { APP_VERSION } from '../styles';
 
 /**
  * Pantalla de Carga y Bienvenida (Splash Screen).
- * Muestra el logotipo corporativo animado junto a una barra de progreso mientras
- * se cargan las credenciales y configuración del Bluetooth en segundo plano.
- * Estilizado exclusivamente con Tailwind CSS.
  */
 export default function SplashScreen() {
-  const { cargando, userName } = useBluetooth();
+  const { cargando, deviceMac } = useBluetooth();
   const opacity = useRef(new Animated.Value(1)).current;
   const progress = useRef(new Animated.Value(0)).current;
   const [minTimeElapsed, setMinTimeElapsed] = useState(false);
 
   useEffect(() => {
-    Animated.timing(progress, {
-      toValue: 1,
-      duration: 3000,
-      useNativeDriver: false,
-    }).start(() => {
+    Animated.timing(progress, { toValue: 1, duration: 1000, useNativeDriver: false }).start(() => {
       setMinTimeElapsed(true);
     });
   }, [progress]);
 
   useEffect(() => {
     if (!cargando && minTimeElapsed) {
-      Animated.timing(opacity, {
-        toValue: 0,
-        duration: 350,
-        useNativeDriver: true,
-      }).start(() => {
-        if (userName) {
-          router.replace('/(tabs)');
-        } else {
-          router.replace('/nombre');
-        }
+      Animated.timing(opacity, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => {
+        router.replace(deviceMac ? '/control' : '/inicio');
       });
     }
-  }, [cargando, minTimeElapsed, opacity, userName]);
+  }, [cargando, minTimeElapsed, opacity, deviceMac]);
 
   return (
     <Animated.View style={[tw`flex-1 items-center justify-center bg-beige-bg`, { opacity }]}>
@@ -67,6 +52,10 @@ export default function SplashScreen() {
             },
           ]}
         />
+      </View>
+
+      <View style={tw`absolute bottom-8 items-center`}>
+        <Text style={tw`text-xs text-stone-400/80 font-medium tracking-widest`}>v{APP_VERSION}</Text>
       </View>
     </Animated.View>
   );
