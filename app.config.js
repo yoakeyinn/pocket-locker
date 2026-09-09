@@ -65,8 +65,8 @@ module.exports = ({ config }) => {
     ...config,
     name: 'Pocket Locker',
     slug: 'pocket-locker',
-    version: '1.4.1',
-    runtimeVersion: '1.4.1',
+    version: '1.5.0',
+    runtimeVersion: '1.5.0',
     updates: {
       url: 'https://u.expo.dev/30c00fa6-7d04-44dd-8f0a-99a5bbf25f72',
     },

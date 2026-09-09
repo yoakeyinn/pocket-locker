@@ -17,7 +17,7 @@ export const Colors = {
 /**
  * Versión oficial de la aplicación Pocket Locker.
  */
-export const APP_VERSION = '1.4.1';
+export const APP_VERSION = '1.5.0';
 
 /**
  * Instancia centralizada de Tailwind CSS para React Native (twrnc).
