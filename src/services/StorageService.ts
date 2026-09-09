@@ -410,14 +410,68 @@ export interface InfoPinParsed {
   mensajeError?: string;
 }
 
+/**
+ * Valida y desglosa un código PIN según las especificaciones del sistema Pocket Locker:
+ * - Admin: 2415
+ * - Usuario: 2S0BPxGxx (primera x: peatonal 0/1, segunda x: garaje 0/1, días opcionales 1-99)
+ */
 export function parsearYValidarPin(pin?: string | null): InfoPinParsed {
   if (!pin || typeof pin !== 'string') {
-    return { esValido: false, esAdmin: false, peatonal: false, garaje: false, dias: null, mensajeError: 'El PIN no puede estar vacío.' };
+    return {
+      esValido: false,
+      esAdmin: false,
+      peatonal: false,
+      garaje: false,
+      dias: null,
+      mensajeError: 'El PIN no puede estar vacío.',
+    };
   }
-  if (pin.trim().toUpperCase() === DEFAULT_SECURITY_PIN) {
-    return { esValido: true, esAdmin: false, peatonal: true, garaje: true, dias: null };
+  const p = pin.trim().toUpperCase();
+  if (p === DEFAULT_SECURITY_PIN) {
+    return {
+      esValido: true,
+      esAdmin: true,
+      peatonal: true,
+      garaje: true,
+      dias: null,
+    };
   }
-  return { esValido: false, esAdmin: false, peatonal: false, garaje: false, dias: null, mensajeError: 'Código incorrecto. Introduce el PIN 2415.' };
+
+  const match = p.match(/^2S0BP([01])G([01])(\d{1,2})?$/);
+  if (!match) {
+    return {
+      esValido: false,
+      esAdmin: false,
+      peatonal: false,
+      garaje: false,
+      dias: null,
+      mensajeError: 'El código debe tener el formato 2S0BPxGxx (ej. 2S0BP1G1 o 2S0BP1G03) o ser 2415.',
+    };
+  }
+
+  const peatonal = match[1] === '1';
+  const garaje = match[2] === '1';
+  const diasStr = match[3];
+  const dias = diasStr ? parseInt(diasStr, 10) : null;
+
+  if (!peatonal && !garaje) {
+    return {
+      esValido: false,
+      esAdmin: false,
+      peatonal: false,
+      garaje: false,
+      dias: null,
+      mensajeError: 'El PIN debe autorizar al menos un acceso (puerta peatonal o garaje).',
+    };
+  }
+
+  return {
+    esValido: true,
+    esAdmin: false,
+    peatonal,
+    garaje,
+    dias,
+  };
 }
 
 export interface DispositivoGuardado {
@@ -426,6 +480,9 @@ export interface DispositivoGuardado {
   userName: string | null;
   type: 'classic' | 'ble';
   pin: string;
+  role?: 'admin' | 'user';
+  permisos?: { peatonal: boolean; garaje: boolean };
+  diasRestantes?: number | null;
 }
 
 class StorageServiceClass {
@@ -649,6 +706,7 @@ class StorageServiceClass {
       ]);
       const mapa = Object.fromEntries(resultados);
       const pin = await this.getDevicePin();
+      const parsed = parsearYValidarPin(pin);
 
       return {
         mac: mapa[KEYS.DEVICE_MAC] || null,
@@ -656,10 +714,22 @@ class StorageServiceClass {
         userName: mapa[KEYS.USER_NAME] || null,
         type: (mapa[KEYS.DEVICE_TYPE] === 'ble' ? 'ble' : 'classic') as 'classic' | 'ble',
         pin: pin || DEFAULT_SECURITY_PIN,
+        role: parsed.esAdmin ? 'admin' : 'user',
+        permisos: { peatonal: parsed.peatonal, garaje: parsed.garaje },
+        diasRestantes: parsed.dias,
       };
     } catch (e) {
       LogService.error('Error leyendo dispositivo desde storage', e);
-      return { mac: null, name: null, userName: null, type: 'classic', pin: DEFAULT_SECURITY_PIN };
+      return {
+        mac: null,
+        name: null,
+        userName: null,
+        type: 'classic',
+        pin: DEFAULT_SECURITY_PIN,
+        role: 'user',
+        permisos: { peatonal: true, garaje: true },
+        diasRestantes: null,
+      };
     }
   }
 }

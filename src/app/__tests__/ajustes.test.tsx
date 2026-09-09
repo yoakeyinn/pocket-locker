@@ -231,9 +231,9 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
     expect(getByText('Tema de la Aplicación')).toBeTruthy();
   });
 
-  it('debe renderizar la versión oficial v1.4.0 en AppInfoCard', async () => {
+  it('debe renderizar la versión oficial v1.4.1 en AppInfoCard', async () => {
     const { getByText } = await render(<AppInfoCard />);
-    expect(getByText('Pocket Locker v1.4.0')).toBeTruthy();
+    expect(getByText('Pocket Locker v1.4.1')).toBeTruthy();
   });
 
   it('al pulsar Cambiar PIN con bloqueo activo, debe solicitar autenticación biométrica', async () => {

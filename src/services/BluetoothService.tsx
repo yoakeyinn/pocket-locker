@@ -3,7 +3,7 @@ import { Platform, PermissionsAndroid, NativeModules, Linking, AppState, AppStat
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
 import { BleManager, Device } from 'react-native-ble-plx';
 import { create } from 'zustand';
-import StorageService, { LogService, DEFAULT_SECURITY_PIN } from './StorageService';
+import StorageService, { LogService, DEFAULT_SECURITY_PIN, parsearYValidarPin } from './StorageService';
 
 // =============================================================================
 // 1. CONSTANTES Y TIPOS BLUETOOTH
@@ -681,6 +681,9 @@ export interface PocketState {
   tiempoRestanteBloqueo: number;
   userName: string | null;
   ultimaPuerta: 'peatonal' | 'garaje';
+  userRole: 'admin' | 'user';
+  permisos: { peatonal: boolean; garaje: boolean };
+  diasRestantes: number | null;
 }
 
 export interface PocketActions {
@@ -720,6 +723,9 @@ export const initialPocketState: PocketState = {
   tiempoRestanteBloqueo: 0,
   userName: null,
   ultimaPuerta: 'peatonal',
+  userRole: 'user',
+  permisos: { peatonal: true, garaje: true },
+  diasRestantes: null,
 };
 
 let bloqueoIntervalId: any = null;
@@ -861,6 +867,7 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
     user?: string
   ) => {
     const usuarioFinal = user || get().userName || (await StorageService.getUserName()) || 'Usuario';
+    const parsed = parsearYValidarPin(pin);
     try {
       await StorageService.saveDevice(mac, name, type, pin, usuarioFinal);
       set({
@@ -870,6 +877,9 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
         devicePin: pin,
         userName: usuarioFinal,
         status: 'disconnected',
+        userRole: parsed.esAdmin ? 'admin' : 'user',
+        permisos: { peatonal: parsed.peatonal, garaje: parsed.garaje },
+        diasRestantes: parsed.dias,
       });
     } catch (e) {
       LogService.error('Error persistiendo dispositivo vinculado', e);
@@ -878,8 +888,14 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
   },
 
   actualizarPinDispositivo: async (nuevoPin: string) => {
+    const parsed = parsearYValidarPin(nuevoPin);
     await StorageService.saveDevicePin(nuevoPin);
-    set({ devicePin: nuevoPin });
+    set({
+      devicePin: nuevoPin,
+      userRole: parsed.esAdmin ? 'admin' : 'user',
+      permisos: { peatonal: parsed.peatonal, garaje: parsed.garaje },
+      diasRestantes: parsed.dias,
+    });
   },
 
   actualizarNombreDispositivo: async (nuevoNombre: string) => {
@@ -897,6 +913,9 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
         deviceName: null,
         devicePin: DEFAULT_SECURITY_PIN,
         status: 'unpaired',
+        userRole: 'user',
+        permisos: { peatonal: true, garaje: true },
+        diasRestantes: null,
       });
     } catch (e) {
       LogService.error('Error desvinculando dispositivo', e);
@@ -912,7 +931,7 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
         StorageService.getUserName(),
         StorageService.getUltimaPuerta(),
       ]);
-      const { mac, name, userName: uName, type, pin } = dispositivo;
+      const { mac, name, userName: uName, type, pin, role, permisos, diasRestantes } = dispositivo;
       const effectiveUser = uName || savedUserName || null;
 
       if (mac) {
@@ -924,6 +943,9 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
           userName: effectiveUser,
           status: 'disconnected',
           ultimaPuerta: savedUltimaPuerta || 'peatonal',
+          userRole: role || 'user',
+          permisos: permisos || { peatonal: true, garaje: true },
+          diasRestantes: diasRestantes ?? null,
         });
       } else {
         set({
@@ -934,6 +956,9 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
           userName: effectiveUser,
           status: 'unpaired',
           ultimaPuerta: savedUltimaPuerta || 'peatonal',
+          userRole: 'user',
+          permisos: { peatonal: true, garaje: true },
+          diasRestantes: null,
         });
       }
     } catch (e) {

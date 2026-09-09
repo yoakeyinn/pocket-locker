@@ -25,6 +25,7 @@ export default function RootLayout() {
         >
           <Stack.Screen name="index" />
           <Stack.Screen name="splash" />
+          <Stack.Screen name="nombre" />
           <Stack.Screen name="inicio" />
           <Stack.Screen name="control" />
           <Stack.Screen name="ajustes" />

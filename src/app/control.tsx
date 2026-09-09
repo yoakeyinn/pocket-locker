@@ -130,10 +130,17 @@ export default function ControlScreen() {
     ultimaPuerta,
     guardarUltimaPuerta,
     pedirActivar,
+    userRole,
+    permisos,
+    diasRestantes,
   } = useBluetooth();
 
+  const tienePeatonal = userRole === 'admin' || (permisos ? permisos.peatonal !== false : true);
+  const tieneGaraje = userRole === 'admin' || (permisos ? permisos.garaje !== false : true);
+  const tieneAmbas = tienePeatonal && tieneGaraje;
+
   const [pestanaActiva, setPestanaActiva] = useState<'peatonal' | 'garaje'>(
-    ultimaPuerta || 'peatonal'
+    !tienePeatonal && tieneGaraje ? 'garaje' : ultimaPuerta || 'peatonal'
   );
   const [ejecutando, setEjecutando] = useState<'peatonal' | 'garaje' | null>(null);
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
@@ -166,18 +173,22 @@ export default function ControlScreen() {
   const panX = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (ultimaPuerta) {
+    if (!tienePeatonal && tieneGaraje) {
+      setPestanaActiva('garaje');
+    } else if (tienePeatonal && !tieneGaraje) {
+      setPestanaActiva('peatonal');
+    } else if (ultimaPuerta) {
       setPestanaActiva(ultimaPuerta);
     } else {
       StorageService.getUltimaPuerta()
         .then((puerta) => { if (puerta) setPestanaActiva(puerta); })
         .catch(() => {});
     }
-  }, [ultimaPuerta]);
+  }, [ultimaPuerta, tienePeatonal, tieneGaraje]);
 
   const transicionarHacia = useCallback(
     (direccion: 'izquierda' | 'derecha', objetivo?: 'peatonal' | 'garaje') => {
-      if (isTransitioningRef.current) return;
+      if (!tieneAmbas || isTransitioningRef.current) return;
 
       const siguiente: 'peatonal' | 'garaje' =
         objetivo || (pestanaActiva === 'peatonal' ? 'garaje' : 'peatonal');
@@ -209,7 +220,7 @@ export default function ControlScreen() {
         });
       });
     },
-    [pestanaActiva, panX, cardEntranceAnim, guardarUltimaPuerta]
+    [pestanaActiva, panX, cardEntranceAnim, guardarUltimaPuerta, tieneAmbas]
   );
 
   const panResponder = useMemo(() => {
@@ -221,7 +232,7 @@ export default function ControlScreen() {
       onStartShouldSetPanResponder: () => false,
       onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (_, g) =>
-        !ejecutandoRef.current && Math.abs(g.dx) >= 20 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+        tieneAmbas && !ejecutandoRef.current && Math.abs(g.dx) >= 20 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
       onMoveShouldSetPanResponderCapture: () => false,
       onPanResponderGrant: () => {
         panX.stopAnimation();
@@ -259,6 +270,16 @@ export default function ControlScreen() {
   const handleAbrir = useCallback(
     async (tipo: 'peatonal' | 'garaje', comando: string) => {
       if (ejecutandoRef.current || ejecutando !== null || tiempoRestanteBloqueo > 0) return;
+
+      if (tipo === 'peatonal' && !tienePeatonal) {
+        Alert.alert('Sin permiso', 'No tienes permiso para abrir la puerta peatonal.');
+        return;
+      }
+      if (tipo === 'garaje' && !tieneGaraje) {
+        Alert.alert('Sin permiso', 'No tienes permiso para abrir el portón de garaje.');
+        return;
+      }
+
       ejecutandoRef.current = true;
       setEjecutando(tipo);
       Haptics.selectionAsync().catch(() => {});
@@ -363,7 +384,17 @@ export default function ControlScreen() {
         Alert.alert('Error', e?.message || 'Ocurrió un error inesperado');
       }
     },
-    [ejecutando, tiempoRestanteBloqueo, status, conectar, enviarComando, iniciarBloqueoMargen, desconectar]
+    [
+      ejecutando,
+      tiempoRestanteBloqueo,
+      status,
+      conectar,
+      enviarComando,
+      iniciarBloqueoMargen,
+      desconectar,
+      tienePeatonal,
+      tieneGaraje,
+    ]
   );
 
   const onVolver = useCallback(() => {
@@ -418,10 +449,19 @@ export default function ControlScreen() {
 
           <AccessSegmentedControl
             pestanaActiva={pestanaActiva}
+            tieneAmbas={tieneAmbas}
             onSelect={(puerta) =>
               transicionarHacia(puerta === 'garaje' ? 'izquierda' : 'derecha', puerta)
             }
           />
+
+          {diasRestantes !== null && (
+            <View style={tw`mt-2 px-3 py-1 bg-amber-50 rounded-full border border-amber-200/80`}>
+              <Text style={tw`text-[11px] font-bold text-amber-800`}>
+                Acceso temporal: {diasRestantes} {diasRestantes === 1 ? 'día' : 'días'}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={tw`h-12 items-center justify-center my-1 w-full`}>
@@ -473,29 +513,31 @@ export default function ControlScreen() {
           </Animated.View>
         </View>
 
-        <View style={tw`items-center pb-2`}>
-          <View style={tw`flex-row items-center justify-center gap-2`}>
-            <TouchableOpacity
-              onPress={() => transicionarHacia('derecha', 'peatonal')}
-              activeOpacity={0.7}
-              style={[
-                tw`rounded-full`,
-                pestanaActiva === 'peatonal' ? tw`w-6 h-1.5 bg-emerald-600` : tw`w-1.5 h-1.5 bg-stone-300`,
-              ]}
-            />
-            <TouchableOpacity
-              onPress={() => transicionarHacia('izquierda', 'garaje')}
-              activeOpacity={0.7}
-              style={[
-                tw`rounded-full`,
-                pestanaActiva === 'garaje' ? tw`w-6 h-1.5 bg-azul-primario` : tw`w-1.5 h-1.5 bg-stone-300`,
-              ]}
-            />
+        {tieneAmbas && (
+          <View style={tw`items-center pb-2`}>
+            <View style={tw`flex-row items-center justify-center gap-2`}>
+              <TouchableOpacity
+                onPress={() => transicionarHacia('derecha', 'peatonal')}
+                activeOpacity={0.7}
+                style={[
+                  tw`rounded-full`,
+                  pestanaActiva === 'peatonal' ? tw`w-6 h-1.5 bg-emerald-600` : tw`w-1.5 h-1.5 bg-stone-300`,
+                ]}
+              />
+              <TouchableOpacity
+                onPress={() => transicionarHacia('izquierda', 'garaje')}
+                activeOpacity={0.7}
+                style={[
+                  tw`rounded-full`,
+                  pestanaActiva === 'garaje' ? tw`w-6 h-1.5 bg-azul-primario` : tw`w-1.5 h-1.5 bg-stone-300`,
+                ]}
+              />
+            </View>
+            <Text style={tw`text-xs text-stone-400 mt-2.5 tracking-wider`}>
+              Desliza para cambiar
+            </Text>
           </View>
-          <Text style={tw`text-xs text-stone-400 mt-2.5 tracking-wider`}>
-            Desliza para cambiar
-          </Text>
-        </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );

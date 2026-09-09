@@ -88,36 +88,50 @@ export const ControlHeader: React.FC<ControlHeaderProps> = ({
 export interface AccessSegmentedControlProps {
   pestanaActiva: 'peatonal' | 'garaje';
   onSelect: (puerta: 'peatonal' | 'garaje') => void;
+  tieneAmbas?: boolean;
 }
 
 export const AccessSegmentedControl: React.FC<AccessSegmentedControlProps> = ({
   pestanaActiva,
   onSelect,
-}) => (
-  <View style={tw`flex-row items-center justify-center p-1 bg-stone-200/60 rounded-full mb-2`}>
-    <TouchableOpacity
-      testID="tab-peatonal"
-      onPress={() => onSelect('peatonal')}
-      style={tw`px-5 py-2 rounded-full ${pestanaActiva === 'peatonal' ? 'bg-emerald-600 shadow-sm' : 'bg-transparent'}`}
-      activeOpacity={0.8}
-    >
-      <Text style={tw`text-xs font-bold ${pestanaActiva === 'peatonal' ? 'text-white' : 'text-stone-600'}`}>
-        Puerta Peatonal
-      </Text>
-    </TouchableOpacity>
+  tieneAmbas = true,
+}) => {
+  if (!tieneAmbas) {
+    return (
+      <View style={tw`flex-row items-center justify-center px-4 py-1.5 bg-stone-200/60 rounded-full mb-2`}>
+        <Text style={tw`text-xs font-bold text-azul-oscuro`}>
+          {pestanaActiva === 'garaje' ? 'Portón de Garaje' : 'Puerta Peatonal'}
+        </Text>
+      </View>
+    );
+  }
 
-    <TouchableOpacity
-      testID="tab-garaje"
-      onPress={() => onSelect('garaje')}
-      style={tw`px-5 py-2 rounded-full ${pestanaActiva === 'garaje' ? 'bg-azul-primario shadow-sm' : 'bg-transparent'}`}
-      activeOpacity={0.8}
-    >
-      <Text style={tw`text-xs font-bold ${pestanaActiva === 'garaje' ? 'text-white' : 'text-stone-600'}`}>
-        Portón de Garaje
-      </Text>
-    </TouchableOpacity>
-  </View>
-);
+  return (
+    <View style={tw`flex-row items-center justify-center p-1 bg-stone-200/60 rounded-full mb-2`}>
+      <TouchableOpacity
+        testID="tab-peatonal"
+        onPress={() => onSelect('peatonal')}
+        style={tw`px-5 py-2 rounded-full ${pestanaActiva === 'peatonal' ? 'bg-emerald-600 shadow-sm' : 'bg-transparent'}`}
+        activeOpacity={0.8}
+      >
+        <Text style={tw`text-xs font-bold ${pestanaActiva === 'peatonal' ? 'text-white' : 'text-stone-600'}`}>
+          Puerta Peatonal
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        testID="tab-garaje"
+        onPress={() => onSelect('garaje')}
+        style={tw`px-5 py-2 rounded-full ${pestanaActiva === 'garaje' ? 'bg-azul-primario shadow-sm' : 'bg-transparent'}`}
+        activeOpacity={0.8}
+      >
+        <Text style={tw`text-xs font-bold ${pestanaActiva === 'garaje' ? 'text-white' : 'text-stone-600'}`}>
+          Portón de Garaje
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+};
 
 // =============================================================================
 // 3. PULSADOR CIRCULAR Y ONDAS CONCÉNTRICAS (DOOR ACTION BUTTON)

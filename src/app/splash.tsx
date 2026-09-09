@@ -9,7 +9,7 @@ import tw, { APP_VERSION } from '../styles';
  * Pantalla de Carga y Bienvenida (Splash Screen).
  */
 export default function SplashScreen() {
-  const { cargando, deviceMac } = useBluetooth();
+  const { cargando, deviceMac, userName } = useBluetooth();
   const opacity = useRef(new Animated.Value(1)).current;
   const progress = useRef(new Animated.Value(0)).current;
   const [minTimeElapsed, setMinTimeElapsed] = useState(false);
@@ -23,10 +23,14 @@ export default function SplashScreen() {
   useEffect(() => {
     if (!cargando && minTimeElapsed) {
       Animated.timing(opacity, { toValue: 0, duration: 250, useNativeDriver: true }).start(() => {
-        router.replace(deviceMac ? '/control' : '/inicio');
+        if (!userName) {
+          router.replace('/nombre');
+        } else {
+          router.replace(deviceMac ? '/control' : '/inicio');
+        }
       });
     }
-  }, [cargando, minTimeElapsed, opacity, deviceMac]);
+  }, [cargando, minTimeElapsed, opacity, deviceMac, userName]);
 
   return (
     <Animated.View style={[tw`flex-1 items-center justify-center bg-beige-bg`, { opacity }]}>
