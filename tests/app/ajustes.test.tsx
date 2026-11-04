@@ -1,10 +1,9 @@
 import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react-native';
-import { useBluetooth, BluetoothService } from '../../services/BluetoothService';
-import AjustesScreen, { AppInfoCard } from '../ajustes';
-import { BackHandler, Alert } from 'react-native';
+import { useBluetooth, BluetoothService } from '../../src/services/BluetoothService';
+import AjustesScreen, { AppInfoCard } from '../../src/app/ajustes';
+import { mostrarModal } from '../../src/components/Modal';
 
-// Mock de react-native
 jest.mock('react-native', () => {
   const React = require('react');
   return {
@@ -24,11 +23,12 @@ jest.mock('react-native', () => {
     ScrollView: (props: any) => React.createElement('ScrollView', props, props.children),
     TextInput: (props: any) => React.createElement('TextInput', props),
     ActivityIndicator: (props: any) => React.createElement('ActivityIndicator', props),
-    BackHandler: {
-      exitApp: jest.fn(),
-    },
-    Alert: {
-      alert: jest.fn(),
+    Easing: {
+      out: jest.fn((fn) => fn),
+      inOut: jest.fn((fn) => fn),
+      cubic: jest.fn(),
+      quad: jest.fn(),
+      back: jest.fn(() => jest.fn()),
     },
     StyleSheet: {
       create: (styles: any) => styles,
@@ -40,42 +40,18 @@ jest.mock('react-native', () => {
   };
 });
 
-// Mock de StorageService y BiometricService
-jest.mock('../../services/StorageService', () => ({
-  __esModule: true,
-  default: {
-    saveDeviceName: jest.fn().mockResolvedValue(undefined),
-    getAppLockConfig: jest.fn().mockResolvedValue({ enabled: false, mode: 'pin', pin: '' }),
-    saveAppLockConfig: jest.fn().mockResolvedValue(undefined),
-    getAppCustomPreferences: jest.fn().mockResolvedValue({
-      appName: 'Pocket Locker',
-      appIcon: 'clasico',
-      themeMode: 'light',
-      themeColor: 'azul',
-    }),
-    saveAppCustomPreferences: jest.fn().mockResolvedValue(undefined),
-  },
-  StorageService: {
-    saveDeviceName: jest.fn().mockResolvedValue(undefined),
-    getAppLockConfig: jest.fn().mockResolvedValue({ enabled: false, mode: 'pin', pin: '' }),
-    saveAppLockConfig: jest.fn().mockResolvedValue(undefined),
-    getAppCustomPreferences: jest.fn().mockResolvedValue({
-      appName: 'Pocket Locker',
-      appIcon: 'clasico',
-      themeMode: 'light',
-      themeColor: 'azul',
-    }),
-    saveAppCustomPreferences: jest.fn().mockResolvedValue(undefined),
-  },
-  BiometricService: {
-    soportaBiometria: jest.fn().mockResolvedValue(true),
-    tieneBiometriaRegistrada: jest.fn().mockResolvedValue(true),
-    autenticarParaDesbloquearApp: jest.fn().mockResolvedValue({ exito: true }),
-    autenticarParaEditarPin: jest.fn().mockResolvedValue({ exito: true }),
-  },
+jest.mock('../../src/services/StorageService', () => ({
+  LogService: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
-// Mock de react-native-safe-area-context
+jest.mock('../../src/components/Modal', () => ({ mostrarModal: jest.fn() }));
+jest.mock('../../src/components/Aparece', () => ({
+  Aparece: (props: any) => require('react').createElement('View', props, props.children),
+}));
+jest.mock('../../src/components/Cargando', () => ({
+  Cargando: () => require('react').createElement('Cargando'),
+}));
+
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
   return {
@@ -83,8 +59,7 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
-// Mock de BluetoothService y useBluetooth
-jest.mock('../../services/BluetoothService', () => ({
+jest.mock('../../src/services/BluetoothService', () => ({
   __esModule: true,
   useBluetooth: jest.fn(),
   BluetoothService: {
@@ -97,7 +72,6 @@ jest.mock('../../services/BluetoothService', () => ({
   },
 }));
 
-// Mock de expo-router
 jest.mock('expo-router', () => ({
   router: {
     push: jest.fn(),
@@ -107,7 +81,6 @@ jest.mock('expo-router', () => ({
   },
 }));
 
-// Mock de @expo/vector-icons
 jest.mock('@expo/vector-icons', () => {
   const React = require('react');
   return {
@@ -132,7 +105,7 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
     });
   });
 
-  it('al pulsar desconectar del locker, debe desconectar y abrir ajustes de Bluetooth del móvil', async () => {
+  it('al pulsar desconectar del locker, solo desconecta (sin abrir los ajustes del sistema)', async () => {
     const { getByTestId } = await render(<AjustesScreen />);
 
     const btnToggle = getByTestId('btn-toggle-conexion');
@@ -143,10 +116,10 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
     });
 
     expect(mockDesconectar).toHaveBeenCalled();
-    expect(BluetoothService.abrirAjustesBluetooth).toHaveBeenCalled();
+    expect(BluetoothService.abrirAjustesBluetooth).not.toHaveBeenCalled();
   });
 
-  it('al pulsar desvincular dispositivo, debe solicitar confirmación en Alert', async () => {
+  it('al pulsar desvincular dispositivo, debe solicitar confirmación en un modal', async () => {
     const { getByTestId } = await render(<AjustesScreen />);
 
     const btnDesvincular = getByTestId('btn-desvincular');
@@ -156,14 +129,14 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
       fireEvent.press(btnDesvincular);
     });
 
-    expect(Alert.alert).toHaveBeenCalledWith(
+    expect(mostrarModal).toHaveBeenCalledWith(
       'Desvincular dispositivo',
-      expect.stringContaining('Se borrarán los datos del dispositivo y la app se cerrará'),
+      expect.stringContaining('Se borrarán los datos del dispositivo'),
       expect.any(Array)
     );
   });
 
-  it('al confirmar desvincular, debe desconectar, desvincular del SO, purgar datos y llamar a BackHandler.exitApp', async () => {
+  it('al confirmar desvincular, debe desconectar, desvincular del SO, purgar datos y volver a /buscar', async () => {
     const { getByTestId } = await render(<AjustesScreen />);
 
     const btnDesvincular = getByTestId('btn-desvincular');
@@ -171,10 +144,9 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
       fireEvent.press(btnDesvincular);
     });
 
-    // Simular pulsación de "Desvincular y Salir" en el Alert
-    const alertCall = (Alert.alert as jest.Mock).mock.calls[0];
+    const alertCall = (mostrarModal as jest.Mock).mock.calls[0];
     const buttons = alertCall[2];
-    const confirmButton = buttons.find((b: any) => b.text === 'Desvincular y Salir');
+    const confirmButton = buttons.find((b: any) => b.text === 'Desvincular');
 
     expect(confirmButton).toBeDefined();
 
@@ -185,7 +157,7 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
     expect(mockDesconectar).toHaveBeenCalled();
     expect(BluetoothService.desvincularDispositivo).toHaveBeenCalledWith('AA:BB:CC:DD:EE:FF');
     expect(mockDesvincularDispositivo).toHaveBeenCalled();
-    expect(BackHandler.exitApp).toHaveBeenCalled();
+    expect(require('expo-router').router.replace).toHaveBeenCalledWith('/buscar');
   });
 
   it('al pulsar el botón volver, debe llamar a router.back o router.replace', async () => {
@@ -199,7 +171,7 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
       fireEvent.press(btnVolver);
     });
 
-    expect(router.replace).toHaveBeenCalledWith('/control');
+    expect(router.replace).toHaveBeenCalledWith('/puertas');
   });
 
   it('al pulsar conectar estando desconectado, debe intentar conectar sin mostrar falsas alertas de éxito', async () => {
@@ -220,35 +192,24 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
     });
 
     expect(mockConectar).toHaveBeenCalled();
-    expect(Alert.alert).not.toHaveBeenCalledWith('Conectado', expect.anything());
+    expect(mostrarModal).not.toHaveBeenCalledWith('Conectado', expect.anything());
   });
 
-  it('debe renderizar las secciones de Bloqueo de la App, Personalización y Temas', async () => {
-    const { getByText } = await render(<AjustesScreen />);
+  it('sin dispositivo vinculado ofrece buscarlo', async () => {
+    (useBluetooth as jest.Mock).mockReturnValue({ deviceName: null, deviceMac: null, status: 'unpaired' });
+    const { router } = require('expo-router');
+    const { getByText, getByTestId, queryByTestId } = await render(<AjustesScreen />);
 
-    expect(getByText('Bloqueo de la App')).toBeTruthy();
-    expect(getByText('Personalización de la App')).toBeTruthy();
-    expect(getByText('Tema de la Aplicación')).toBeTruthy();
-  });
-
-  it('debe renderizar la versión oficial v1.4.0 en AppInfoCard', async () => {
-    const { getByText } = await render(<AppInfoCard />);
-    expect(getByText('Pocket Locker v1.4.0')).toBeTruthy();
-  });
-
-  it('al pulsar Cambiar PIN con bloqueo activo, debe solicitar autenticación biométrica', async () => {
-    const StorageModule = require('../../services/StorageService');
-    StorageModule.default.getAppLockConfig.mockResolvedValueOnce({ enabled: true, mode: 'pin', pin: '1234' });
-    StorageModule.StorageService.getAppLockConfig.mockResolvedValueOnce({ enabled: true, mode: 'pin', pin: '1234' });
-
-    const { findByText } = await render(<AjustesScreen />);
-    const btnCambiarPin = await findByText('Cambiar PIN');
-    expect(btnCambiarPin).toBeTruthy();
-
+    expect(getByText('Sin dispositivo vinculado')).toBeTruthy();
+    expect(queryByTestId('btn-desvincular')).toBeNull();
     await act(async () => {
-      fireEvent.press(btnCambiarPin);
+      fireEvent.press(getByTestId('btn-buscar-locker'));
     });
+    expect(router.replace).toHaveBeenCalledWith('/buscar');
+  });
 
-    expect(StorageModule.BiometricService.autenticarParaEditarPin).toHaveBeenCalled();
+  it('debe renderizar la versión de package.json en AppInfoCard', async () => {
+    const { getByText } = await render(<AppInfoCard />);
+    expect(getByText(`Pocket Locker v${require('../../package.json').version}`)).toBeTruthy();
   });
 });

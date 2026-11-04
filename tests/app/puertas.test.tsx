@@ -1,9 +1,8 @@
 import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react-native';
-import { useBluetooth } from '../../services/BluetoothService';
-import ControlScreen from '../control';
+import { useBluetooth } from '../../src/services/BluetoothService';
+import PuertasScreen from '../../src/app/puertas';
 
-// Mock de react-native con elementos de host estándar
 jest.mock('react-native', () => {
   const React = require('react');
   return {
@@ -54,6 +53,8 @@ jest.mock('react-native', () => {
       out: jest.fn((fn) => fn),
       ease: jest.fn(),
       quad: jest.fn(),
+      cubic: jest.fn(),
+      back: jest.fn(() => jest.fn()),
       linear: jest.fn(),
       in: jest.fn((fn) => fn),
       inOut: jest.fn((fn) => fn),
@@ -74,9 +75,6 @@ jest.mock('react-native', () => {
         _config: config,
       })),
     },
-    Alert: {
-      alert: jest.fn(),
-    },
     AppState: {
       addEventListener: jest.fn().mockReturnValue({ remove: jest.fn() }),
       currentState: 'active',
@@ -84,7 +82,6 @@ jest.mock('react-native', () => {
   };
 });
 
-// Mock de react-native-safe-area-context
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
   return {
@@ -92,7 +89,6 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
-// Mock de expo-haptics
 jest.mock('expo-haptics', () => ({
   selectionAsync: jest.fn().mockResolvedValue(undefined),
   notificationAsync: jest.fn().mockResolvedValue(undefined),
@@ -103,15 +99,13 @@ jest.mock('expo-haptics', () => ({
   },
 }));
 
-// Mock de useBluetooth
-jest.mock('../../services/BluetoothService', () => ({
+jest.mock('../../src/services/BluetoothService', () => ({
   __esModule: true,
   useBluetooth: jest.fn(),
   BluetoothService: {},
   default: {},
 }));
 
-// Mock de react-native-bluetooth-classic
 jest.mock('react-native-bluetooth-classic', () => ({
   __esModule: true,
   default: {
@@ -120,7 +114,6 @@ jest.mock('react-native-bluetooth-classic', () => ({
   },
 }));
 
-// Mock de expo-router
 jest.mock('expo-router', () => ({
   router: {
     push: jest.fn(),
@@ -128,17 +121,16 @@ jest.mock('expo-router', () => ({
   },
 }));
 
-// Mock de @expo/vector-icons
 jest.mock('@expo/vector-icons', () => {
   const React = require('react');
   return {
     MaterialIcons: (props: any) => React.createElement('Text', null, props.name),
     FontAwesome5: (props: any) => React.createElement('Text', null, props.name),
+    FontAwesome6: (props: any) => React.createElement('Text', null, props.name),
   };
 });
 
-// Mock de StorageService
-jest.mock('../../services/StorageService', () => ({
+jest.mock('../../src/services/StorageService', () => ({
   __esModule: true,
   default: {
     getUltimaPuerta: jest.fn().mockResolvedValue('peatonal'),
@@ -155,7 +147,7 @@ jest.mock('../../services/StorageService', () => ({
   },
 }));
 
-describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
+describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
   const mockConectar = jest.fn();
   const mockDesconectar = jest.fn().mockResolvedValue(undefined);
   const mockEnviarComando = jest.fn();
@@ -179,7 +171,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
   });
 
   it('debería renderizar correctamente el título y estado conectado', async () => {
-    const { getByText, getAllByText } = await render(<ControlScreen />);
+    const { getByText, getAllByText } = await render(<PuertasScreen />);
 
     expect(getByText('Panel de Control')).toBeTruthy();
     expect(getByText('Locker Test')).toBeTruthy();
@@ -188,7 +180,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
   });
 
   it('debería enviar el comando P al presionar el botón de puerta peatonal', async () => {
-    const { getByTestId } = await render(<ControlScreen />);
+    const { getByTestId } = await render(<PuertasScreen />);
 
     const button = getByTestId('btn-peatonal');
     expect(button).toBeTruthy();
@@ -202,7 +194,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
   });
 
   it('debería alternar entre accesos al pulsar las pestañas del selector', async () => {
-    const { getByTestId, queryByTestId } = await render(<ControlScreen />);
+    const { getByTestId, queryByTestId } = await render(<PuertasScreen />);
 
     expect(getByTestId('btn-peatonal')).toBeTruthy();
     expect(queryByTestId('btn-garaje')).toBeNull();
@@ -216,7 +208,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
   });
 
   it('debería enviar el comando G al presionar el botón de portón de garaje', async () => {
-    const { getByTestId } = await render(<ControlScreen />);
+    const { getByTestId } = await render(<PuertasScreen />);
 
     await act(async () => {
       fireEvent.press(getByTestId('tab-garaje'));
@@ -239,6 +231,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
       deviceName: 'Locker Test',
       deviceMac: '00:11:22:33:44:55',
       conectar: mockConectar,
+      desconectar: mockDesconectar,
       enviarComando: mockEnviarComando,
       tiempoRestanteBloqueo: 0,
       iniciarBloqueoMargen: mockIniciarBloqueoMargen,
@@ -246,7 +239,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
       guardarUltimaPuerta: mockGuardarUltimaPuerta,
     });
 
-    const { getByTestId } = await render(<ControlScreen />);
+    const { getByTestId } = await render(<PuertasScreen />);
 
     const button = getByTestId('btn-peatonal');
     await act(async () => {
@@ -263,6 +256,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
       deviceName: 'Locker Test',
       deviceMac: '00:11:22:33:44:55',
       conectar: mockConectar,
+      desconectar: mockDesconectar,
       enviarComando: mockEnviarComando,
       tiempoRestanteBloqueo: 5,
       iniciarBloqueoMargen: mockIniciarBloqueoMargen,
@@ -270,7 +264,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
       guardarUltimaPuerta: mockGuardarUltimaPuerta,
     });
 
-    const { getByTestId, getByText } = await render(<ControlScreen />);
+    const { getByTestId, getByText } = await render(<PuertasScreen />);
 
     const btnPeatonal = getByTestId('btn-peatonal');
     expect(btnPeatonal.props.onPress).toBeUndefined();
@@ -290,6 +284,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
       deviceName: 'Locker Test',
       deviceMac: '00:11:22:33:44:55',
       conectar: mockConectar,
+      desconectar: mockDesconectar,
       enviarComando: mockEnviarComando,
       tiempoRestanteBloqueo: 0,
       iniciarBloqueoMargen: mockIniciarBloqueoMargen,
@@ -297,7 +292,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
       guardarUltimaPuerta: mockGuardarUltimaPuerta,
     });
 
-    const { getByTestId, queryByTestId } = await render(<ControlScreen />);
+    const { getByTestId, queryByTestId } = await render(<PuertasScreen />);
 
     expect(getByTestId('btn-garaje')).toBeTruthy();
     expect(queryByTestId('btn-peatonal')).toBeNull();
@@ -305,7 +300,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
 
   it('debería alternar a garaje y persistir ultimaPuerta al deslizar a la izquierda (swipe left)', async () => {
     const { PanResponder } = require('react-native');
-    const { getByTestId, queryByTestId } = await render(<ControlScreen />);
+    const { getByTestId, queryByTestId } = await render(<PuertasScreen />);
 
     expect(getByTestId('btn-peatonal')).toBeTruthy();
     expect(queryByTestId('btn-garaje')).toBeNull();
@@ -340,7 +335,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
       guardarUltimaPuerta: mockGuardarUltimaPuerta,
     });
 
-    const { getByTestId, queryByTestId } = await render(<ControlScreen />);
+    const { getByTestId, queryByTestId } = await render(<PuertasScreen />);
 
     expect(getByTestId('btn-garaje')).toBeTruthy();
     expect(queryByTestId('btn-peatonal')).toBeNull();
@@ -359,7 +354,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
 
   it('debería mostrar banner de confirmación en pantalla y no navegar a resultado al abrir', async () => {
     const { router } = require('expo-router');
-    const { getByTestId, getByText } = await render(<ControlScreen />);
+    const { getByTestId, getByText } = await render(<PuertasScreen />);
 
     const button = getByTestId('btn-peatonal');
     await act(async () => {
@@ -374,7 +369,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
   });
 
   it('debería desconectar al desmontar la pantalla para no bloquear el locker', async () => {
-    const { unmount } = await render(<ControlScreen />);
+    const { unmount } = await render(<PuertasScreen />);
     await act(async () => {
       unmount();
     });
@@ -383,7 +378,7 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
 
   it('debería navegar a ajustes al presionar el botón de ajustes de la cabecera', async () => {
     const { router } = require('expo-router');
-    const { getByTestId } = await render(<ControlScreen />);
+    const { getByTestId } = await render(<PuertasScreen />);
 
     const btnAjustes = getByTestId('btn-header-ajustes');
     expect(btnAjustes).toBeTruthy();
@@ -395,8 +390,39 @@ describe('Unified ControlScreen (Minimalist Infinite Scroll)', () => {
     expect(router.push).toHaveBeenCalledWith('/ajustes');
   });
 
+  it('saluda al usuario en la cabecera', async () => {
+    (useBluetooth as jest.Mock).mockReturnValue({ ...(useBluetooth as jest.Mock)(), userName: 'Ana' });
+    const { getByText } = await render(<PuertasScreen />);
+    expect(getByText('Hola, Ana')).toBeTruthy();
+  });
+
+  it('sin dispositivo vinculado muestra el estado vacío y no los controles', async () => {
+    const { router } = require('expo-router');
+    (useBluetooth as jest.Mock).mockReturnValue({
+      status: 'unpaired',
+      deviceName: null,
+      deviceMac: null,
+      conectar: mockConectar,
+      desconectar: mockDesconectar,
+      enviarComando: mockEnviarComando,
+      tiempoRestanteBloqueo: 0,
+      iniciarBloqueoMargen: mockIniciarBloqueoMargen,
+      ultimaPuerta: 'peatonal',
+      guardarUltimaPuerta: mockGuardarUltimaPuerta,
+    });
+
+    const { getByText, getByTestId, queryByTestId } = await render(<PuertasScreen />);
+
+    expect(getByText('Sin dispositivo vinculado')).toBeTruthy();
+    expect(queryByTestId('btn-peatonal')).toBeNull();
+    await act(async () => {
+      fireEvent.press(getByTestId('btn-buscar-locker'));
+    });
+    expect(router.replace).toHaveBeenCalledWith('/buscar');
+  });
+
   it('no debería contener la palabra "Abrir" dentro del botón, manteniendo "Pulsar para abrir" debajo', async () => {
-    const { getByText, queryByText } = await render(<ControlScreen />);
+    const { getByText, queryByText } = await render(<PuertasScreen />);
 
     expect(getByText('Pulsar para abrir')).toBeTruthy();
     expect(queryByText('Abrir')).toBeNull();

@@ -7,7 +7,7 @@ jest.mock('expo-secure-store', () => ({
   deleteItemAsync: jest.fn(),
 }));
 
-import { CryptoService } from "../StorageService";
+import { CryptoService } from "../../src/services/StorageService";
 
 describe("CryptoService HMAC-SHA256", () => {
     it("debería calcular el hash HMAC-SHA256 correctamente", () => {
@@ -21,7 +21,6 @@ describe("CryptoService HMAC-SHA256", () => {
     });
 
     it("debería satisfacer el vector de prueba RFC 4231 Test Case 1", () => {
-        // RFC 4231 Test Case 1: Key = 20 bytes of 0x0b, Data = "Hi There"
         const key = String.fromCharCode(...new Array(20).fill(0x0b));
         const data = "Hi There";
         const expected = "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7";
@@ -31,7 +30,6 @@ describe("CryptoService HMAC-SHA256", () => {
     });
 
     it("debería satisfacer el vector de prueba RFC 4231 Test Case 2", () => {
-        // RFC 4231 Test Case 2: Key = "Jefe", Data = "what do ya want for nothing?"
         const key = "Jefe";
         const data = "what do ya want for nothing?";
         const expected = "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843";

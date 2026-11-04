@@ -1,132 +1,61 @@
 # <img src="./assets/icon.png" width="40" height="40" style="border-radius: 50%; vertical-align: middle;" alt="Pocket Locker Logo" /> Pocket Locker
 
-Pocket Locker es una aplicación móvil diseñada para abrir y cerrar puertas peatonales y portones automáticos de garaje desde tu teléfono móvil mediante conexión Bluetooth con una placa ESP32.
+App móvil (Expo / React Native) para abrir una puerta peatonal y un portón de garaje desde el teléfono, por Bluetooth, con un ESP32 que activa dos relés.
 
-El sistema utiliza autenticación criptográfica HMAC-SHA256 con protección contra ataques de repetición (anti-replay), garantizando que solo los dispositivos autorizados puedan activar los relés de apertura.
+## Qué necesitas
 
----
+- **Hardware:** una placa ESP32, un módulo de 2 relés, cables y un cable USB. Teléfono con Android 8+ o iOS 13+.
+- **Software:** Git, Node.js 18+, VS Code con la extensión **PlatformIO IDE**.
 
-## Requisitos Previos
+## Conexiones
 
-### Hardware necesario
+| ESP32        | Módulo de relés | Función                    |
+| :----------- | :-------------- | :------------------------- |
+| **GPIO 26**  | IN1             | Portón de garaje           |
+| **GPIO 27**  | IN2             | Puerta peatonal            |
+| **VIN / 5V** | VCC             | Alimentación del módulo    |
+| **GND**      | GND             | Masa común                 |
 
-- 1 Placa de desarrollo ESP32 (ESP32 Dev Module, NodeMCU-32S o similar).
-- 1 Módulo de relés de 2 canales (5V o 3.3V).
-- Cables de conexión (Jumpers hembra-hembra / macho-hembra).
-- 1 Cable micro-USB / USB-C para programar el ESP32.
-- 1 Teléfono móvil con Android 8.0+ o iOS 13+.
+Los relés se activan en nivel bajo. Para probar con LEDs (GPIO → resistencia → LED → GND, activos en alto) usa el entorno `esp32dev_leds` de PlatformIO.
 
-### Software necesario en tu ordenador
+## Puesta en marcha
 
-- Git: [git-scm.com](https://git-scm.com/)
-- Node.js (versión 18 o superior): [nodejs.org](https://nodejs.org/)
-- Visual Studio Code: [code.visualstudio.com](https://code.visualstudio.com/)
-- Extensión **PlatformIO IDE** para VS Code.
+1. **Clonar e instalar**
+   ```bash
+   git clone https://github.com/yoakeyinn/pocket-locker.git
+   cd pocket-locker
+   npm install
+   ```
+2. **Programar el ESP32:** abre la carpeta `esp32/` en VS Code, conecta la placa y sube el firmware con el botón *Upload* de PlatformIO o con `pio run -t upload`. Al terminar, el ESP32 emite Bluetooth con el nombre **PLBT** y el PIN por defecto **2415**.
+3. **Instalar la app en el teléfono.** Expo Go no incluye Bluetooth, así que hace falta una build nativa (con el teléfono conectado por USB y la depuración USB activada en Android):
+   ```bash
+   npx expo prebuild
+   npx expo run:android   # o: npx expo run:ios (requiere Mac con Xcode)
+   ```
+4. **Vincular:** con el Bluetooth encendido, abre la app. Detecta el PLBT por sí sola y te pide confirmar; si no, pulsa *Ver dispositivos manualmente*, elige **PLBT** e introduce el PIN. Después usa *Puerta* o *Garaje* en la pantalla principal.
 
----
-
-## Esquema de Conexión del Hardware (ESP32 y Relés)
-
-Conecta los pines del ESP32 a la placa de relés según esta tabla:
-
-| Pin ESP32    | Pin Módulo Relé | Función                                    |
-| :----------- | :-------------- | :----------------------------------------- |
-| **GPIO 26**  | IN1             | Control de apertura del Portón / Garaje    |
-| **GPIO 27**  | IN2             | Control de apertura de la Puerta Peatonal  |
-| **VIN / 5V** | VCC             | Alimentación eléctrica del módulo de relés |
-| **GND**      | GND             | Masa común                                 |
-
----
-
-## Guía Paso a Paso de Instalación y Puesta en Marcha
-
-### Paso 1: Clonar el repositorio
-
-Abre una terminal en tu ordenador y ejecuta:
+## Probar la app sin ESP32
 
 ```bash
-git clone https://github.com/yoakeyinn/pocket-locker.git
-cd pocket-locker
+npm run simular                       # con un locker ya vinculado
+npm run simular -- --sin-vincular     # empieza en la búsqueda
+npm run simular -- --bluetooth-apagado
 ```
 
----
+Simula un adaptador Bluetooth y siete dispositivos cercanos (el PLBT entre ellos) para revisar todas las pantallas. Funciona también en Expo Go. Añade `--dev-client --tunnel` si lo necesitas.
 
-### Paso 2: Programar el Firmware en el ESP32
+## Desarrollo
 
-1. Abre **Visual Studio Code**.
-2. Asegúrate de tener instalada la extensión **PlatformIO IDE** (búscala en la pestaña de extensiones con `Ctrl+Shift+X`).
-3. Ve a **Archivo > Abrir carpeta...** y selecciona la subcarpeta `esp32` de este repositorio (`pocket-locker/esp32`).
-4. Conecta la placa ESP32 al puerto USB de tu ordenador con el cable.
-5. Abre la terminal de PlatformIO o presiona el botón de la flecha hacia la derecha (**Upload**) en la barra inferior azul de VS Code. También puedes ejecutar por comando:
-    ```bash
-    pio run -t upload
-    ```
-6. Cuando la terminal muestre `[SUCCESS]`, el ESP32 ya estará emitiendo señal Bluetooth con el nombre **PLBT** y el PIN por defecto **2415**.
+```bash
+npm test             # tests (Jest)
+npx tsc --noEmit     # comprobación de tipos
+```
 
----
+Builds con EAS: perfiles `development`, `preview` (APK) y `production` en `eas.json`. La versión se cambia solo en `package.json`. Las decisiones de diseño y las reglas del código están en [CLAUDE.md](./CLAUDE.md).
 
-### Paso 3: Instalar las Dependencias de la App Móvil
+## Seguridad
 
-1. En la terminal de tu ordenador, sitúate en la raíz del proyecto (`pocket-locker`):
-    ```bash
-    cd ..
-    ```
-2. Instala todas las librerías necesarias ejecutando:
-    ```bash
-    npm install
-    ```
-
----
-
-### Paso 4: Ejecutar la App en tu Teléfono
-
-Tienes dos formas de probar la aplicación:
-
-#### Opción A: Modo Simulación (Rápido, con Expo Go)
-
-Ideal para probar el diseño y funcionamiento visual sin cables ni microcontrolador físico.
-
-1. Instala la app **Expo Go** en tu móvil desde Google Play Store o Apple App Store.
-2. Inicia el servidor de desarrollo en tu ordenador:
-    ```bash
-    npx expo start
-    ```
-3. Escanea el código QR que aparece en la terminal con la cámara de tu móvil (iOS) o desde la app Expo Go (Android).
-4. Dentro de la app, pulsa el icono de depuración (herramienta en la cabecera) para activar el **Modo Simulación**.
-
-#### Opción B: Ejecución Nativa con Bluetooth Real (Recomendado)
-
-Para conectarte físicamente al ESP32 por Bluetooth necesitas generar la compilación nativa:
-
-1. Conecta tu teléfono Android o iPhone a tu ordenador por cable USB (asegúrate de tener activada la Depuración por USB en Android).
-2. Genera los archivos nativos de la app:
-    ```bash
-    npx expo prebuild
-    ```
-3. Compila e instala la app en tu teléfono:
-    - Para Android:
-        ```bash
-        npx expo run:android
-        ```
-    - Para iOS (requiere Mac con Xcode):
-        ```bash
-        npx expo run:ios
-        ```
-
----
-
-### Paso 5: Vincular y Abrir Puertas
-
-1. Enciende el Bluetooth de tu teléfono móvil.
-2. Abre la aplicación **Pocket Locker**.
-3. En la pantalla principal, pulsa **Buscar dispositivos**.
-4. Selecciona el dispositivo **PLBT** de la lista.
-5. Introduce el PIN de seguridad por defecto: `2415`.
-6. En el panel de control, pulsa **Abrir Puerta** o **Abrir Garaje**. El ESP32 activará el relé correspondiente durante 1 segundo.
-
----
-
-## Seguridad y Personalización
-
-- **Cambiar el PIN:** Puedes modificar el PIN desde la pestaña **Ajustes** de la aplicación móvil. El nuevo PIN se guardará cifrado en el enclave seguro de tu teléfono y se sincronizará con la memoria interna del ESP32.
-- **Periodo de enfriamiento:** El microcontrolador incluye una protección automática de 2 segundos entre pulsaciones para evitar sobrecalentamiento de los motores de la puerta.
+- Cada pulsación activa el relé **5 s**, con un enfriamiento de **5 s** antes de aceptar otra.
+- Un PIN erróneo añade una espera creciente a los siguientes intentos, pero no bloquea el acceso.
+- El firmware admite autenticación por desafío (HMAC-SHA256 con nonce de 15 s), pero **la app envía hoy el PIN directamente**. No lo uses como única barrera de seguridad.
+- El PIN de la app se guarda en el almacén seguro del teléfono. El PIN por defecto (2415) está en el código del firmware y de la app (`DEFAULT_SECURITY_PIN` en `src/services/comun.ts`); cámbialo en ambos antes de un uso real. La app no tiene todavía una pantalla para cambiarlo.

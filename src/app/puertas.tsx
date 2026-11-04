@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { t } from '../styles/i18n';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  Alert,
   Animated,
   AppState,
   PanResponder,
   ScrollView,
-  Text,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -15,22 +14,18 @@ import * as Haptics from 'expo-haptics';
 import { MaterialIcons } from '@expo/vector-icons';
 import BluetoothService, { useBluetooth } from '../services/BluetoothService';
 import {
-  ControlHeader,
+  PuertasHeader,
   DoorActionButton,
   AccessSegmentedControl,
-} from '../components/ControlComponents';
-import StorageService, { LogService } from '../services/StorageService';
-import tw from '../styles';
+} from '../components/puertas/PuertasComponents';
+import { LogService } from '../services/StorageService';
+import { mostrarModal } from '../components/Modal';
+import { SinDispositivoCard } from '../components/SinDispositivoCard';
+import { Text } from '../styles/tipografia/Tipografia';
+import tw, { Colors, cicloPulso } from '../styles/styles';
+import { Puerta, USUARIO_POR_DEFECTO } from '../services/comun';
 
-/**
- * Hook modular de animaciones fluidas a 60 FPS.
- * Coordina transiciones de tarjetas, pulsación elástica, parpadeo y radar concéntrico.
- */
-function useControlAnimations(
-  status: string,
-  ejecutando: 'peatonal' | 'garaje' | null,
-  tiempoRestanteBloqueo: number
-) {
+function usePuertasAnimations(status: string, ejecutando: Puerta | null) {
   const cardEntranceAnim = useRef(new Animated.Value(1)).current;
   const buttonPressScale = useRef(new Animated.Value(1)).current;
   const blinkValue = useRef(new Animated.Value(1)).current;
@@ -40,7 +35,6 @@ function useControlAnimations(
   const radarOpacity1 = useRef(new Animated.Value(0.35)).current;
   const radarOpacity2 = useRef(new Animated.Value(0.2)).current;
 
-  // Parpadeo suave cuando el estado es 'connecting'
   useEffect(() => {
     let anim: Animated.CompositeAnimation | null = null;
     if (status === 'connecting') {
@@ -57,7 +51,6 @@ function useControlAnimations(
     return () => anim?.stop();
   }, [status, blinkValue]);
 
-  // Pulsos de radar concéntricos durante la apertura
   useEffect(() => {
     if (!ejecutando) {
       radarPulse1.setValue(1);
@@ -67,21 +60,10 @@ function useControlAnimations(
       return;
     }
 
-    const pulseCycle = (pulse: Animated.Value, opacity: Animated.Value, maxScale: number, maxOpacity: number, delayMs = 0) =>
-      Animated.sequence([
-        Animated.delay(delayMs),
-        Animated.parallel([
-          Animated.timing(pulse, { toValue: maxScale, duration: 1000, useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 0, duration: 1000, useNativeDriver: true }),
-        ]),
-        Animated.timing(pulse, { toValue: 1, duration: 0, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: maxOpacity, duration: 0, useNativeDriver: true }),
-      ]);
-
     const radarAnim = Animated.loop(
       Animated.parallel([
-        pulseCycle(radarPulse1, radarOpacity1, 1.38, 0.5, 0),
-        pulseCycle(radarPulse2, radarOpacity2, 1.5, 0.4, 400),
+        cicloPulso(radarPulse1, radarOpacity1, { escala: 1.38, opacidadInicial: 0.5, duracion: 1000 }),
+        cicloPulso(radarPulse2, radarOpacity2, { escala: 1.5, opacidadInicial: 0.4, duracion: 1000, retraso: 400 }),
       ])
     );
     radarAnim.start();
@@ -110,18 +92,12 @@ function useControlAnimations(
   };
 }
 
-/**
- * Pantalla principal de control de accesos (Panel de Control).
- *
- * Características:
- * - Deslizable con scroll infinito bidireccional entre Peatonal y Garaje.
- * - Margen de exclusión mutua de 5 segundos.
- * - Desconexión inmediata al salir o minimizar para liberar el ESP32.
- */
-export default function ControlScreen() {
+export default function PuertasScreen() {
   const {
     status,
     deviceName,
+    deviceMac,
+    userName,
     conectar,
     desconectar,
     enviarComando,
@@ -132,18 +108,27 @@ export default function ControlScreen() {
     pedirActivar,
   } = useBluetooth();
 
-  const [pestanaActiva, setPestanaActiva] = useState<'peatonal' | 'garaje'>(
+  const [pestanaActiva, setPestanaActiva] = useState<Puerta>(
     ultimaPuerta || 'peatonal'
   );
-  const [ejecutando, setEjecutando] = useState<'peatonal' | 'garaje' | null>(null);
+  const [ejecutando, setEjecutando] = useState<Puerta | null>(null);
   const [mensajeExito, setMensajeExito] = useState<string | null>(null);
   const [scrollHabilitado, setScrollHabilitado] = useState(true);
 
   const ejecutandoRef = useRef(false);
   const isTransitioningRef = useRef(false);
-  const autoDisconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const mensajeExitoTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const aperturaAnimTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoDisconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mensajeExitoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aperturaAnimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const terminarEjecucion = useCallback(() => {
+    ejecutandoRef.current = false;
+    setEjecutando(null);
+  }, []);
+
+  const desconectarEnSilencio = useCallback(() => {
+    desconectar().catch(() => {});
+  }, [desconectar]);
 
   const limpiarTimers = useCallback(() => {
     if (autoDisconnectTimerRef.current) clearTimeout(autoDisconnectTimerRef.current);
@@ -161,36 +146,33 @@ export default function ControlScreen() {
     radarOpacity2,
     onPressInButton,
     onPressOutButton,
-  } = useControlAnimations(status, ejecutando, tiempoRestanteBloqueo);
+  } = usePuertasAnimations(status, ejecutando);
 
   const panX = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    if (ultimaPuerta) {
-      setPestanaActiva(ultimaPuerta);
-    } else {
-      StorageService.getUltimaPuerta()
-        .then((puerta) => { if (puerta) setPestanaActiva(puerta); })
-        .catch(() => {});
-    }
+    setPestanaActiva(ultimaPuerta);
   }, [ultimaPuerta]);
 
+  const centrarTarjeta = useCallback(() => {
+    Animated.spring(panX, { toValue: 0, friction: 6, tension: 60, useNativeDriver: true }).start();
+  }, [panX]);
+
   const transicionarHacia = useCallback(
-    (direccion: 'izquierda' | 'derecha', objetivo?: 'peatonal' | 'garaje') => {
+    (direccion: 'izquierda' | 'derecha', objetivo?: Puerta) => {
       if (isTransitioningRef.current) return;
 
-      const siguiente: 'peatonal' | 'garaje' =
+      const siguiente: Puerta =
         objetivo || (pestanaActiva === 'peatonal' ? 'garaje' : 'peatonal');
 
       if (siguiente === pestanaActiva) {
-        Animated.spring(panX, { toValue: 0, friction: 6, tension: 60, useNativeDriver: true }).start();
+        centrarTarjeta();
         return;
       }
 
       isTransitioningRef.current = true;
       Haptics.selectionAsync().catch(() => {});
-      guardarUltimaPuerta?.(siguiente)?.catch?.(() => {});
-      StorageService.saveUltimaPuerta(siguiente).catch(() => {});
+      guardarUltimaPuerta(siguiente).catch(() => {});
 
       const exitX = direccion === 'izquierda' ? -130 : 130;
       const enterX = -exitX;
@@ -209,14 +191,10 @@ export default function ControlScreen() {
         });
       });
     },
-    [pestanaActiva, panX, cardEntranceAnim, guardarUltimaPuerta]
+    [pestanaActiva, panX, cardEntranceAnim, guardarUltimaPuerta, centrarTarjeta]
   );
 
   const panResponder = useMemo(() => {
-    if (typeof PanResponder === 'undefined' || !PanResponder.create) {
-      return { panHandlers: {} };
-    }
-
     return PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onStartShouldSetPanResponderCapture: () => false,
@@ -246,48 +224,40 @@ export default function ControlScreen() {
         } else if (dx > 0 && (esFlick || esArrastre)) {
           transicionarHacia('derecha');
         } else {
-          Animated.spring(panX, { toValue: 0, friction: 6, tension: 60, useNativeDriver: true }).start();
+          centrarTarjeta();
         }
       },
       onPanResponderTerminate: () => {
         setScrollHabilitado(true);
-        Animated.spring(panX, { toValue: 0, friction: 6, tension: 60, useNativeDriver: true }).start();
+        centrarTarjeta();
       },
     });
-  }, [transicionarHacia, panX]);
+  }, [transicionarHacia, panX, centrarTarjeta]);
 
   const handleAbrir = useCallback(
-    async (tipo: 'peatonal' | 'garaje', comando: string) => {
+    async (tipo: Puerta, comando: string) => {
       if (ejecutandoRef.current || ejecutando !== null || tiempoRestanteBloqueo > 0) return;
+
+      LogService.info(`[Puertas] Abrir ${tipo} (comando ${comando}, estado=${status})`);
       ejecutandoRef.current = true;
       setEjecutando(tipo);
       Haptics.selectionAsync().catch(() => {});
 
       try {
-        if (status === 'unpaired') {
-          Alert.alert('Sin dispositivo', 'No hay un dispositivo vinculado. Vincula uno primero.', [
-            { text: 'Cancelar', style: 'cancel' },
-            { text: 'Vincular', onPress: () => router.replace('/inicio') },
-          ]);
-          return;
-        }
-
         if (status === 'disabled') {
           LogService.info('Bluetooth apagado. Solicitando activación...');
-          const activado = await pedirActivar?.().catch(() => false);
+          const activado = await pedirActivar().catch(() => false);
           if (!activado) {
-            ejecutandoRef.current = false;
-            setEjecutando(null);
+            terminarEjecucion();
             return;
           }
         }
 
         if (status === 'unauthorized') {
-          ejecutandoRef.current = false;
-          setEjecutando(null);
-          Alert.alert(
+          terminarEjecucion();
+          mostrarModal(
             'Sin permisos',
-            'Pocket Locker necesita permisos de Bluetooth y Dispositivos cercanos para conectarse.',
+            `${t('pl_app_titulo')} necesita permisos de Bluetooth y ${t('pl_dispositivos_cercanos')} para conectarse.`,
             [
               { text: 'Cancelar', style: 'cancel' },
               { text: 'Abrir Ajustes', onPress: () => BluetoothService.abrirAjustesApp() },
@@ -300,8 +270,8 @@ export default function ControlScreen() {
           try {
             await conectar();
           } catch (btErr: any) {
-            ejecutandoRef.current = false;
-            setEjecutando(null);
+            LogService.error(`[Puertas] No se pudo conectar para abrir ${tipo}`, btErr);
+            terminarEjecucion();
             const rawMsg = btErr?.message || '';
             const esErrorPermiso =
               rawMsg.toLowerCase().includes('permiso') ||
@@ -310,18 +280,18 @@ export default function ControlScreen() {
               rawMsg.toLowerCase().includes('lacks permission');
 
             if (esErrorPermiso) {
-              Alert.alert(
+              mostrarModal(
                 'Permisos de Bluetooth necesarios',
-                'Pocket Locker necesita permisos de Bluetooth en este teléfono para conectarse a la puerta.\n\nPor favor, actívalos en Ajustes de la aplicación.',
+                `${t('pl_app_titulo')} necesita permisos de Bluetooth en este teléfono para conectarse a la puerta.\n\nPor favor, actívalos en Ajustes de la aplicación.`,
                 [
                   { text: 'Cancelar', style: 'cancel' },
                   { text: 'Abrir Ajustes', onPress: () => BluetoothService.abrirAjustesApp() },
                 ]
               );
             } else {
-              Alert.alert(
+              mostrarModal(
                 'Error de conexión',
-                `No se pudo conectar con el Pocket Locker.\n\n${rawMsg || 'Verifica que esté encendido y en rango.'}`
+                `No se pudo conectar con el ${t('pl_app_titulo')}.\n\n${rawMsg || 'Verifica que esté encendido y en rango.'}`
               );
             }
             return;
@@ -332,6 +302,7 @@ export default function ControlScreen() {
           await enviarComando(comando);
           iniciarBloqueoMargen(5);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+          LogService.info(`[Puertas] ${tipo} abierta correctamente`);
           setMensajeExito(
             tipo === 'garaje' ? '¡Portón de garaje abriéndose!' : '¡Puerta peatonal abriéndose!'
           );
@@ -341,65 +312,73 @@ export default function ControlScreen() {
 
           if (aperturaAnimTimerRef.current) clearTimeout(aperturaAnimTimerRef.current);
           aperturaAnimTimerRef.current = setTimeout(() => {
-            ejecutandoRef.current = false;
-            setEjecutando(null);
+            terminarEjecucion();
             aperturaAnimTimerRef.current = null;
           }, 2500);
 
           if (autoDisconnectTimerRef.current) clearTimeout(autoDisconnectTimerRef.current);
           autoDisconnectTimerRef.current = setTimeout(() => {
-            desconectar?.()?.catch?.(() => {});
+            desconectarEnSilencio();
           }, 1500);
         } catch (err: any) {
-          ejecutandoRef.current = false;
-          setEjecutando(null);
+          LogService.error(`[Puertas] No se pudo enviar el comando de ${tipo}`, err);
+          terminarEjecucion();
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
-          Alert.alert('No se pudo abrir', err?.message || 'No se pudo enviar el comando.');
-          desconectar?.()?.catch?.(() => {});
+          mostrarModal('No se pudo abrir', err?.message || 'No se pudo enviar el comando.');
+          desconectarEnSilencio();
         }
       } catch (e: any) {
-        ejecutandoRef.current = false;
-        setEjecutando(null);
-        Alert.alert('Error', e?.message || 'Ocurrió un error inesperado');
+        LogService.error(`[Puertas] Error inesperado al abrir ${tipo}`, e);
+        terminarEjecucion();
+        mostrarModal('Error', e?.message || 'Ocurrió un error inesperado');
       }
     },
-    [ejecutando, tiempoRestanteBloqueo, status, conectar, enviarComando, iniciarBloqueoMargen, desconectar]
+    [ejecutando, tiempoRestanteBloqueo, status, conectar, enviarComando, iniciarBloqueoMargen, pedirActivar, desconectarEnSilencio, terminarEjecucion]
   );
-
-  const onVolver = useCallback(() => {
-    limpiarTimers();
-    desconectar?.()?.catch?.(() => {});
-    router.replace('/inicio');
-  }, [limpiarTimers, desconectar]);
 
   useEffect(() => {
     return () => {
       limpiarTimers();
-      desconectar?.()?.catch?.(() => {});
+      desconectarEnSilencio();
     };
-  }, [limpiarTimers, desconectar]);
+  }, [limpiarTimers, desconectarEnSilencio]);
 
   useEffect(() => {
-    const sub = AppState?.addEventListener?.('change', (nextState) => {
-      if (nextState === 'background' || nextState === 'inactive') {
-        desconectar?.()?.catch?.(() => {});
-      }
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background' || nextState === 'inactive') desconectarEnSilencio();
     });
-    return () => sub?.remove?.();
-  }, [desconectar]);
+    return () => sub.remove();
+  }, [desconectarEnSilencio]);
 
   useEffect(() => {
     if (status !== 'connected' || ejecutando !== null || tiempoRestanteBloqueo > 0) return;
-    const timer = setTimeout(() => { desconectar?.()?.catch?.(() => {}); }, 25000);
+    const timer = setTimeout(desconectarEnSilencio, 25000);
     return () => clearTimeout(timer);
-  }, [status, ejecutando, tiempoRestanteBloqueo, desconectar]);
+  }, [status, ejecutando, tiempoRestanteBloqueo, desconectarEnSilencio]);
 
   const botonDeshabilitado = ejecutando !== null || tiempoRestanteBloqueo > 0;
 
+  if (!deviceMac) {
+    return (
+      <SafeAreaView style={tw`flex-1 bg-beige`} edges={['top', 'bottom']}>
+        <PuertasHeader
+          userName={userName || USUARIO_POR_DEFECTO}
+          status={status}
+          deviceName={deviceName}
+          blinkValue={blinkValue}
+          onPressAjustes={() => router.push('/ajustes')}
+        />
+        <View style={tw`flex-1 justify-center px-5`}>
+          <SinDispositivoCard onBuscar={() => router.replace('/buscar')} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
-    <SafeAreaView style={tw`flex-1 bg-beige-bg`} edges={['top', 'bottom']}>
-      <ControlHeader
-        onVolver={onVolver}
+    <SafeAreaView style={tw`flex-1 bg-beige`} edges={['top', 'bottom']}>
+      <PuertasHeader
+        userName={userName || USUARIO_POR_DEFECTO}
         status={status}
         deviceName={deviceName}
         blinkValue={blinkValue}
@@ -412,7 +391,7 @@ export default function ControlScreen() {
         contentContainerStyle={tw`p-5 pb-10 flex-grow justify-between`}
       >
         <View style={tw`items-center`}>
-          <Text style={tw`text-xl font-bold text-azul-oscuro tracking-tight mb-4`}>
+          <Text style={tw`font-display text-xl font-bold text-black tracking-tight mb-4`}>
             Panel de Control
           </Text>
 
@@ -428,10 +407,10 @@ export default function ControlScreen() {
           {mensajeExito && (
             <View
               testID="banner-exito-apertura"
-              style={tw`flex-row items-center justify-center bg-emerald-50 border border-emerald-300 rounded-2xl px-4 py-2 shadow-sm`}
+              style={tw`flex-row items-center justify-center bg-silver border border-gray rounded-2xl px-4 py-2 shadow-sm`}
             >
-              <MaterialIcons name="check-circle" size={20} color="#10B981" />
-              <Text style={tw`text-emerald-900 font-bold text-xs ml-2`}>
+              <MaterialIcons name="check-circle" size={20} color={Colors.black} />
+              <Text style={tw`text-black font-bold text-xs ml-2`}>
                 {mensajeExito}
               </Text>
             </View>
@@ -480,7 +459,7 @@ export default function ControlScreen() {
               activeOpacity={0.7}
               style={[
                 tw`rounded-full`,
-                pestanaActiva === 'peatonal' ? tw`w-6 h-1.5 bg-emerald-600` : tw`w-1.5 h-1.5 bg-stone-300`,
+                pestanaActiva === 'peatonal' ? tw`w-6 h-1.5 bg-black` : tw`w-1.5 h-1.5 bg-silver`,
               ]}
             />
             <TouchableOpacity
@@ -488,11 +467,11 @@ export default function ControlScreen() {
               activeOpacity={0.7}
               style={[
                 tw`rounded-full`,
-                pestanaActiva === 'garaje' ? tw`w-6 h-1.5 bg-azul-primario` : tw`w-1.5 h-1.5 bg-stone-300`,
+                pestanaActiva === 'garaje' ? tw`w-6 h-1.5 bg-black` : tw`w-1.5 h-1.5 bg-silver`,
               ]}
             />
           </View>
-          <Text style={tw`text-xs text-stone-400 mt-2.5 tracking-wider`}>
+          <Text style={tw`text-xs text-gray mt-2.5 tracking-wider`}>
             Desliza para cambiar
           </Text>
         </View>

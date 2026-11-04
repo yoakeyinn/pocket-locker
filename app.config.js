@@ -1,9 +1,5 @@
-const { withAndroidManifest } = require('@expo/config-plugins');
+const { withAndroidManifest, withProjectBuildGradle } = require('expo/config-plugins');
 
-/**
- * Plugin de configuración que anula el atributo `android:maxSdkVersion="30"` en los
- * permisos BLUETOOTH y BLUETOOTH_ADMIN para compatibilidad nativa con Android 12+ (API 31+).
- */
 const withBluetoothPermissionFix = (config) => {
   return withAndroidManifest(config, async (expoConfig) => {
     const androidManifest = expoConfig.modResults;
@@ -23,19 +19,16 @@ const withBluetoothPermissionFix = (config) => {
       manifest['uses-permission'] = manifest['uses-permission'].map((perm) => {
         const nombre = perm.$?.['android:name'];
 
-        // 1. Quitar maxSdkVersion de BLUETOOTH y BLUETOOTH_ADMIN para Android 12+
         if (nombre && PERMISOS_BLUETOOTH_LEGACY.includes(nombre)) {
           if (perm.$) {
             delete perm.$['android:maxSdkVersion'];
           }
         }
 
-        // 2. Asignar neverForLocation a BLUETOOTH_SCAN para no requerir GPS en Android 12+
         if (nombre === 'android.permission.BLUETOOTH_SCAN' && perm.$) {
           perm.$['android:usesPermissionFlags'] = 'neverForLocation';
         }
 
-        // 3. Limitar permisos de ubicación a Android 10/11 (API <= 30) para no forzar GPS en Android 12+
         if (nombre && PERMISOS_UBICACION_LEGACY.includes(nombre) && perm.$) {
           perm.$['android:maxSdkVersion'] = '30';
         }
@@ -60,15 +53,39 @@ const withBluetoothPermissionFix = (config) => {
   });
 };
 
+const BUILD_CONFIG_MARCA = '// pocket-locker: buildConfig en librerías';
+const withBuildConfigEnabled = (config) =>
+  withProjectBuildGradle(config, (expoConfig) => {
+    const gradle = expoConfig.modResults;
+    if (gradle.language === 'groovy' && !gradle.contents.includes(BUILD_CONFIG_MARCA)) {
+      gradle.contents += `
+${BUILD_CONFIG_MARCA}
+subprojects { subproject ->
+  subproject.plugins.withId('com.android.library') {
+    subproject.android.buildFeatures.buildConfig = true
+  }
+}
+`;
+    }
+    return expoConfig;
+  });
+
+const { colors } = require('./tailwind.config.js').theme;
+const { version } = require('./package.json');
+
+const PROJECT_ID = '30c00fa6-7d04-44dd-8f0a-99a5bbf25f72';
+const ID_APLICACION = 'com.yoakeyinn.pocketlocker';
+const DESCRIPCION_USO_BLUETOOTH = 'Permite conectar con tu dispositivo de garaje';
+
 module.exports = ({ config }) => {
-  return withBluetoothPermissionFix({
+  return withBuildConfigEnabled(withBluetoothPermissionFix({
     ...config,
-    name: 'Pocket Locker',
+    name: require('./src/styles/i18n/locales/es.json').pl_app_titulo,
     slug: 'pocket-locker',
-    version: '1.4.0',
-    runtimeVersion: '1.4.0',
+    version,
+    runtimeVersion: version,
     updates: {
-      url: 'https://u.expo.dev/30c00fa6-7d04-44dd-8f0a-99a5bbf25f72',
+      url: `https://u.expo.dev/${PROJECT_ID}`,
     },
     orientation: 'portrait',
     icon: './assets/icon.png',
@@ -76,14 +93,14 @@ module.exports = ({ config }) => {
     newArchEnabled: true,
     scheme: 'pocketlocker',
     splash: {
-      backgroundColor: '#FAF8F2',
+      backgroundColor: colors.beige,
       resizeMode: 'contain',
     },
     android: {
-      package: 'com.yoakeyinn.pocketlocker',
+      package: ID_APLICACION,
       adaptiveIcon: {
         foregroundImage: './assets/icon.png',
-        backgroundColor: '#EDEBEC',
+        backgroundColor: colors.white,
       },
       permissions: [
         'android.permission.BLUETOOTH',
@@ -93,38 +110,32 @@ module.exports = ({ config }) => {
         'android.permission.ACCESS_FINE_LOCATION',
         'android.permission.ACCESS_COARSE_LOCATION',
         'android.permission.BLUETOOTH_ADVERTISE',
-        'android.permission.USE_BIOMETRIC',
       ],
     },
     ios: {
       supportsTablet: false,
-      bundleIdentifier: 'com.yoakeyinn.pocketlocker',
+      bundleIdentifier: ID_APLICACION,
     },
     plugins: [
       'expo-router',
+      'expo-status-bar',
       [
         'with-rn-bluetooth-classic',
         {
-          peripheralUsageDescription: 'Permite conectar con tu dispositivo de garaje',
-          alwaysUsageDescription: 'Permite conectar con tu dispositivo de garaje',
+          peripheralUsageDescription: DESCRIPCION_USO_BLUETOOTH,
+          alwaysUsageDescription: DESCRIPCION_USO_BLUETOOTH,
         },
       ],
       'expo-font',
       'react-native-ble-plx',
       'expo-secure-store',
-      [
-        'expo-local-authentication',
-        {
-          faceIDPermission: 'Permite autenticar con biometría para ver y modificar el PIN de seguridad',
-        },
-      ],
     ],
     extra: {
       router: {},
       eas: {
-        projectId: '30c00fa6-7d04-44dd-8f0a-99a5bbf25f72',
+        projectId: PROJECT_ID,
       },
     },
-  });
+  }));
 };
 

@@ -1,25 +1,28 @@
+import { t } from '../styles/i18n';
 import React, { createContext, useContext, useEffect, useRef } from 'react';
-import { Platform, PermissionsAndroid, NativeModules, Linking, AppState, AppStateStatus } from 'react-native';
+import { Platform, PermissionsAndroid, NativeModules, Linking, AppState, AppStateStatus, Permission } from 'react-native';
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
 import { BleManager, Device } from 'react-native-ble-plx';
 import { create } from 'zustand';
-import StorageService, { LogService, DEFAULT_SECURITY_PIN } from './StorageService';
-
-// =============================================================================
-// 1. CONSTANTES Y TIPOS BLUETOOTH
-// =============================================================================
+import StorageService, { LogService } from './StorageService';
+import { DEFAULT_SECURITY_PIN, Puerta, TipoDispositivo, USUARIO_POR_DEFECTO } from './comun';
 
 const NUS_SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 const NUS_RX_UUID      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
 const NUS_TX_UUID      = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
 
-export type TipoConexion = 'ble' | 'classic' | null;
+export const SIN_NOMBRE = 'Sin nombre';
+
+const enmascarar = (comando: string) =>
+  comando.trim().replace(/^PLK:(?!LOG:|AUTH:|REQ_CHALLENGE)[^:]+:/, 'PLK:***:');
+
+export type TipoConexion = TipoDispositivo | null;
 
 export interface DispositivoBT {
   name: string;
   address: string;
   bleMac?: string;
-  type: 'classic' | 'ble';
+  type: TipoDispositivo;
 }
 
 export type BluetoothStatus =
@@ -29,10 +32,6 @@ export type BluetoothStatus =
   | 'unauthorized'
   | 'disabled'
   | 'unpaired';
-
-// =============================================================================
-// 2. CONTROLADOR NATIVO BLUETOOTH (BLE GATT + CLASSIC SPP)
-// =============================================================================
 
 class BluetoothServiceClass {
   private bleManager: BleManager | null = null;
@@ -62,28 +61,47 @@ class BluetoothServiceClass {
     if (Platform.OS !== 'android') return true;
     try {
       const apiLevel = this.getApiLevel();
+      const P = PermissionsAndroid.PERMISSIONS;
+      const GRANTED = PermissionsAndroid.RESULTS.GRANTED;
+      let concedido: boolean;
+      let resultado: Record<string, string>;
+
       if (apiLevel >= 31) {
-        const perms = [
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-        ];
-        if (apiLevel >= 34) perms.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADVERTISE);
-        const statuses = await PermissionsAndroid.requestMultiple(perms);
-        return (
-          statuses[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === PermissionsAndroid.RESULTS.GRANTED &&
-          statuses[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === PermissionsAndroid.RESULTS.GRANTED
-        );
+        const perms: Permission[] = [P.BLUETOOTH_SCAN, P.BLUETOOTH_CONNECT];
+        if (apiLevel >= 34) perms.push(P.BLUETOOTH_ADVERTISE);
+        resultado = await PermissionsAndroid.requestMultiple(perms);
+        concedido = resultado[P.BLUETOOTH_SCAN] === GRANTED && resultado[P.BLUETOOTH_CONNECT] === GRANTED;
+      } else {
+        resultado = await PermissionsAndroid.requestMultiple([P.ACCESS_FINE_LOCATION, P.ACCESS_COARSE_LOCATION]);
+        concedido = resultado[P.ACCESS_FINE_LOCATION] === GRANTED || resultado[P.ACCESS_COARSE_LOCATION] === GRANTED;
       }
-      const granted = await PermissionsAndroid.requestMultiple([
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
-      ]);
-      return (
-        granted[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] === PermissionsAndroid.RESULTS.GRANTED ||
-        granted[PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION] === PermissionsAndroid.RESULTS.GRANTED
-      );
+
+      LogService.info(`[Bluetooth] Permisos solicitados (API ${apiLevel}): ${concedido ? 'concedidos' : 'DENEGADOS'}`, resultado);
+      return concedido;
     } catch (e: any) {
       LogService.error('[Bluetooth] Error en solicitud de permisos', e);
+      return false;
+    }
+  }
+
+  async tienePermisos(): Promise<boolean> {
+    if (Platform.OS !== 'android') return true;
+    try {
+      const P = PermissionsAndroid.PERMISSIONS;
+      if (this.getApiLevel() >= 31) {
+        const [scan, connect] = await Promise.all([
+          PermissionsAndroid.check(P.BLUETOOTH_SCAN),
+          PermissionsAndroid.check(P.BLUETOOTH_CONNECT),
+        ]);
+        return scan && connect;
+      }
+      const [fine, coarse] = await Promise.all([
+        PermissionsAndroid.check(P.ACCESS_FINE_LOCATION),
+        PermissionsAndroid.check(P.ACCESS_COARSE_LOCATION),
+      ]);
+      return fine || coarse;
+    } catch (e) {
+      LogService.warn('[Bluetooth] No se pudo comprobar el estado de los permisos', e);
       return false;
     }
   }
@@ -93,7 +111,9 @@ class BluetoothServiceClass {
       try {
         const ok = await RNBluetoothClassic.isBluetoothAvailable();
         if (ok) return true;
-      } catch {}
+      } catch (e) {
+        LogService.warn('[Bluetooth] isBluetoothAvailable falló', e);
+      }
     }
     return !!this.getBleManager();
   }
@@ -103,38 +123,64 @@ class BluetoothServiceClass {
       try {
         const encendido = await RNBluetoothClassic.isBluetoothEnabled();
         if (encendido) return true;
-      } catch {}
+      } catch (e) {
+        LogService.warn('[Bluetooth] isBluetoothEnabled falló', e);
+      }
     }
     const mgr = this.getBleManager();
     if (mgr) {
       try {
         const state = await mgr.state();
         return state === 'PoweredOn';
-      } catch {}
+      } catch (e) {
+        LogService.warn('[BLE] No se pudo leer el estado del adaptador', e);
+      }
     }
     return false;
   }
 
-  async pedirActivar(): Promise<boolean> {
+  async pedirActivar(abrirAjustes: boolean = true): Promise<boolean> {
     if (Platform.OS === 'android' && NativeModules.RNBluetoothClassic) {
       try {
-        return await RNBluetoothClassic.requestBluetoothEnabled();
+        const hayAdaptador = await RNBluetoothClassic.isBluetoothAvailable().catch(() => false);
+        if (!hayAdaptador) {
+          LogService.warn('[Bluetooth] Este dispositivo no tiene adaptador Bluetooth');
+          return false;
+        }
+        if (!(await this.tienePermisos())) {
+          LogService.warn('[Bluetooth] No se puede pedir activar Bluetooth sin permisos');
+          return false;
+        }
+        const activado = await RNBluetoothClassic.requestBluetoothEnabled();
+        LogService.info(`[Bluetooth] Petición de activación del Bluetooth: ${activado ? 'aceptada' : 'rechazada'}`);
+        return activado;
       } catch (e) {
         LogService.warn('[Bluetooth] requestBluetoothEnabled falló', e);
+        return false;
       }
+    }
+    if (!abrirAjustes) {
+      LogService.warn('[Bluetooth] Sin módulo nativo de Bluetooth: no se puede pedir activarlo');
+      return false;
     }
     return this.abrirAjustesBluetooth().then(() => false);
   }
 
+  private async abrirAjusteAndroid(action: string): Promise<boolean> {
+    if (Platform.OS !== 'android') return false;
+    try {
+      const IntentLauncher = require('expo-intent-launcher');
+      await IntentLauncher.startActivityAsync(action);
+      return true;
+    } catch (e) {
+      LogService.warn(`[Bluetooth] No se pudo abrir ${action}`, e);
+      return false;
+    }
+  }
+
   async abrirAjustesBluetooth(): Promise<void> {
     try {
-      if (Platform.OS === 'android') {
-        const IntentLauncher = NativeModules.IntentLauncher || NativeModules.ExpoIntentLauncher;
-        if (IntentLauncher?.startActivity) {
-          await IntentLauncher.startActivity({ action: 'android.settings.BLUETOOTH_SETTINGS' });
-          return;
-        }
-      }
+      if (await this.abrirAjusteAndroid('android.settings.BLUETOOTH_SETTINGS')) return;
       await Linking.openSettings();
     } catch (e) {
       LogService.warn('Error al abrir configuración Bluetooth', e);
@@ -150,23 +196,6 @@ class BluetoothServiceClass {
     }
   }
 
-  async abrirAjustesUbicacion(): Promise<void> {
-    try {
-      if (Platform.OS === 'android') {
-        const IntentLauncher = NativeModules.IntentLauncher || NativeModules.ExpoIntentLauncher;
-        if (IntentLauncher?.startActivity) {
-          await IntentLauncher.startActivity({ action: 'android.settings.LOCATION_SOURCE_SETTINGS' });
-          return;
-        }
-      }
-      await Linking.openSettings();
-    } catch (e) {
-      LogService.warn('Error al abrir configuración de ubicación', e);
-      Linking.openSettings().catch(() => {});
-    }
-  }
-
-
   private getBleManager(): BleManager | null {
     if (!this.bleManager) {
       try {
@@ -181,28 +210,31 @@ class BluetoothServiceClass {
 
   async escanearPLBT(timeoutMs = 8000): Promise<string | null> {
     const mgr = this.getBleManager();
-    if (!mgr) return null;
+    if (!mgr) {
+      LogService.warn('[BLE] escanearPLBT: no hay BleManager');
+      return null;
+    }
 
+    LogService.info(`[BLE] Buscando PLBT durante ${timeoutMs} ms`);
     return new Promise((resolve) => {
-      let encontrado = false;
       const timer = setTimeout(() => {
-        if (!encontrado) {
-          mgr.stopDeviceScan();
-          resolve(null);
-        }
+        mgr.stopDeviceScan();
+        LogService.warn('[BLE] Tiempo agotado: PLBT no encontrado');
+        resolve(null);
       }, timeoutMs);
 
       mgr.startDeviceScan(null, null, (error: any, device: Device | null) => {
         if (error) {
           mgr.stopDeviceScan();
           clearTimeout(timer);
+          LogService.error('[BLE] Error durante el escaneo de PLBT', error);
           resolve(null);
           return;
         }
         if (device && (device.name === 'PLBT' || device.localName === 'PLBT')) {
-          encontrado = true;
           mgr.stopDeviceScan();
           clearTimeout(timer);
+          LogService.info(`[BLE] PLBT encontrado (id=${device.id}, rssi=${device.rssi})`);
           resolve(device.id);
         }
       });
@@ -220,16 +252,19 @@ class BluetoothServiceClass {
     const targetId = bleId || (await this.escanearPLBT(8000));
     if (!targetId) throw new Error('No se encontró el dispositivo PLBT por BLE');
 
+    LogService.info(`[BLE] Conectando a ${targetId}`);
     this.bleDevice = await mgr.connectToDevice(targetId, { timeout: 12000, autoConnect: false });
     await this.bleDevice.discoverAllServicesAndCharacteristics();
 
     const services = await this.bleDevice.services();
+    LogService.info(`[BLE] Servicios descubiertos: ${services.map((s) => s.uuid).join(', ') || '(ninguno)'}`);
     if (!services.some((s) => s.uuid.toLowerCase() === NUS_SERVICE_UUID)) {
       throw new Error(`Servicio Nordic UART (${NUS_SERVICE_UUID}) no encontrado`);
     }
 
     this.limpiarSuscripcionesBLE();
-    this.bleDisconnectSubscription = mgr.onDeviceDisconnected(targetId, () => {
+    this.bleDisconnectSubscription = mgr.onDeviceDisconnected(targetId, (error) => {
+      LogService.warn(`[BLE] Dispositivo ${targetId} desconectado`, error);
       this.bleDevice = null;
       this.limpiarSuscripcionesBLE();
       onDesconexion();
@@ -240,7 +275,7 @@ class BluetoothServiceClass {
       NUS_TX_UUID,
       (error, characteristic) => {
         if (!error && characteristic?.value) {
-          onDatos(this.fromBase64(characteristic.value));
+          onDatos(atob(characteristic.value));
         }
       }
     );
@@ -253,7 +288,7 @@ class BluetoothServiceClass {
     await this.bleDevice.writeCharacteristicWithResponseForService(
       NUS_SERVICE_UUID,
       NUS_RX_UUID,
-      this.toBase64(payload)
+      btoa(payload)
     );
   }
 
@@ -271,8 +306,10 @@ class BluetoothServiceClass {
   async getBondedDevices(): Promise<any[]> {
     if (!NativeModules.RNBluetoothClassic) return [];
     try {
+      if (!(await this.tienePermisos())) return [];
       return await RNBluetoothClassic.getBondedDevices();
-    } catch {
+    } catch (e) {
+      LogService.warn('[Bluetooth] getBondedDevices falló', e);
       return [];
     }
   }
@@ -280,9 +317,13 @@ class BluetoothServiceClass {
   async vincularDispositivo(address: string): Promise<boolean> {
     if (!NativeModules.RNBluetoothClassic) return false;
     try {
+      if (!(await this.tienePermisos())) return false;
+      LogService.info(`[Bluetooth] Emparejando con ${address}`);
       const dev = await RNBluetoothClassic.pairDevice(address);
+      LogService.info(`[Bluetooth] Emparejamiento con ${address}: ${dev ? 'correcto' : 'sin resultado'}`);
       return !!dev;
-    } catch {
+    } catch (e) {
+      LogService.error(`[Bluetooth] Error al emparejar con ${address}`, e);
       return false;
     }
   }
@@ -291,27 +332,33 @@ class BluetoothServiceClass {
     if (!NativeModules.RNBluetoothClassic) return false;
     try {
       if (typeof (RNBluetoothClassic as any).unpairDevice === 'function') {
-        return await (RNBluetoothClassic as any).unpairDevice(address);
+        const resultado = await (RNBluetoothClassic as any).unpairDevice(address);
+        LogService.info(`[Bluetooth] Desemparejado de ${address}: ${resultado}`);
+        return resultado;
       }
+      LogService.warn('[Bluetooth] unpairDevice no está disponible en esta librería');
       return true;
-    } catch {
+    } catch (e) {
+      LogService.error(`[Bluetooth] Error al desemparejar de ${address}`, e);
       return false;
     }
   }
 
   async cancelarDescubrimiento(): Promise<void> {
+    if (!(await this.tienePermisos())) return;
     if (NativeModules.RNBluetoothClassic) {
-      try { await RNBluetoothClassic.cancelDiscovery(); } catch {}
+      try { await RNBluetoothClassic.cancelDiscovery(); } catch (e) { LogService.warn('[Bluetooth] cancelDiscovery falló', e); }
     }
-    try { this.getBleManager()?.stopDeviceScan(); } catch {}
+    try { this.getBleManager()?.stopDeviceScan(); } catch (e) { LogService.warn('[BLE] stopDeviceScan falló', e); }
   }
 
   async listarDispositivos(
     onDispositivoEncontrado?: (dev: DispositivoBT) => void,
     duracionMs: number = 6000
   ): Promise<DispositivoBT[]> {
+    LogService.info(`[Bluetooth] Buscando dispositivos durante ${duracionMs} ms`);
     const okPermisos = await this.solicitarPermisos();
-    if (!okPermisos) throw new Error('Permisos de Bluetooth no concedidos');
+    if (!okPermisos) throw new Error(t('pl_error_permisos'));
 
     await this.cancelarDescubrimiento();
     await new Promise((r) => setTimeout(r, 300));
@@ -321,21 +368,24 @@ class BluetoothServiceClass {
       const k = dev.address.toLowerCase();
       const prev = mapa.get(k);
       if (prev) {
-        if ((!prev.name || prev.name === 'Sin nombre') && dev.name && dev.name !== 'Sin nombre') {
+        if ((!prev.name || prev.name === SIN_NOMBRE) && dev.name && dev.name !== SIN_NOMBRE) {
           prev.name = dev.name;
           onDispositivoEncontrado?.(prev);
         }
         return;
       }
       mapa.set(k, dev);
+      LogService.info(`[Bluetooth] Dispositivo encontrado: ${dev.name} (${dev.address}, ${dev.type})`);
       onDispositivoEncontrado?.(dev);
     };
 
     if (NativeModules.RNBluetoothClassic) {
       try {
         const conectados = await RNBluetoothClassic.getConnectedDevices();
-        conectados?.forEach((c: any) => c?.address && emitir({ name: c.name || 'Sin nombre', address: c.address, type: 'classic' }));
-      } catch {}
+        conectados?.forEach((c: any) => c?.address && emitir({ name: c.name || SIN_NOMBRE, address: c.address, type: 'classic' }));
+      } catch (e) {
+        LogService.warn('[Bluetooth] getConnectedDevices falló', e);
+      }
 
       try {
         const bonded = await RNBluetoothClassic.getBondedDevices();
@@ -345,7 +395,9 @@ class BluetoothServiceClass {
             emitir({ name: b.name || 'PLBT', address: b.address, type: 'classic' });
           }
         });
-      } catch {}
+      } catch (e) {
+        LogService.warn('[Bluetooth] getBondedDevices (listado) falló', e);
+      }
     }
 
     let subClassic: any = null;
@@ -356,12 +408,17 @@ class BluetoothServiceClass {
         if (typeof (RNBluetoothClassic as any).onDeviceDiscovered === 'function') {
           subClassic = (RNBluetoothClassic as any).onDeviceDiscovered((ev: any) => {
             if (ev?.device?.address) {
-              emitir({ name: ev.device.name || 'Sin nombre', address: ev.device.address, type: 'classic' });
+              emitir({ name: ev.device.name || SIN_NOMBRE, address: ev.device.address, type: 'classic' });
             }
           });
         }
-        classicP = RNBluetoothClassic.startDiscovery().catch(() => []);
-      } catch {}
+        classicP = RNBluetoothClassic.startDiscovery().catch((e) => {
+          LogService.warn('[Bluetooth] startDiscovery falló', e);
+          return [];
+        });
+      } catch (e) {
+        LogService.warn('[Bluetooth] No se pudo iniciar el descubrimiento Classic', e);
+      }
     }
 
     const bleMgr = this.getBleManager();
@@ -370,9 +427,13 @@ class BluetoothServiceClass {
         bleMgr.startDeviceScan(null, null, (err, bDev) => {
           if (!err && bDev?.id) {
             emitir({ name: bDev.name || bDev.localName || 'Dispositivo BLE', address: bDev.id, type: 'ble' });
+          } else if (err) {
+            LogService.warn('[BLE] Error durante el escaneo', err);
           }
         });
-      } catch {}
+      } catch (e) {
+        LogService.warn('[BLE] No se pudo iniciar el escaneo', e);
+      }
     }
 
     await new Promise<void>((resolve) => {
@@ -380,9 +441,10 @@ class BluetoothServiceClass {
       classicP.finally(() => { clearTimeout(t); resolve(); });
     });
 
-    try { subClassic?.remove?.(); } catch {}
+    try { subClassic?.remove?.(); } catch (e) { LogService.warn('[Bluetooth] No se pudo quitar el listener de descubrimiento', e); }
     await this.cancelarDescubrimiento();
 
+    LogService.info(`[Bluetooth] Búsqueda terminada: ${mapa.size} dispositivo(s)`);
     return Array.from(mapa.values());
   }
 
@@ -406,35 +468,41 @@ class BluetoothServiceClass {
     onDesconexion: () => void,
     onDatos: (data: string) => void
   ): Promise<void> {
+    LogService.info(`[Classic] Conectando a ${mac}`);
     await this.cancelarDescubrimiento();
     await new Promise((r) => setTimeout(r, 600));
 
     const bonded = await this.getBondedDevices();
     if (!bonded.some((d) => d.address.toUpperCase() === mac.toUpperCase())) {
+      LogService.info(`[Classic] ${mac} no está emparejado todavía: se intenta emparejar`);
       const emparejado = await Promise.race([
         this.vincularDispositivo(mac),
         new Promise<boolean>((r) => setTimeout(() => r(false), 6000)),
       ]);
-      if (!emparejado) throw new Error('No se pudo emparejar el dispositivo Classic');
+      if (!emparejado) throw new Error(t('pl_error_emparejar'));
     }
 
     let err1 = '';
     try {
       await this._intentoSocketClassic(mac, { secure: false, secureSocket: false, delimiter: '\n' });
-      this.configurarMonitoreoClassic(this.classicDevice, mac, onDesconexion, onDatos);
+      this.configurarMonitoreoClassic(this.classicDevice, onDesconexion, onDatos);
       return;
     } catch (e: any) {
       err1 = e?.message || String(e);
+      LogService.warn(`[Classic] Primer intento (socket inseguro) fallido: ${err1}`, e);
       if (err1.toLowerCase().includes('already')) {
         try {
           const conectados = await RNBluetoothClassic.getConnectedDevices();
           const d = conectados.find((x) => x.address.toUpperCase() === mac.toUpperCase());
           if (d && (await d.isConnected().catch(() => false))) {
+            LogService.info(`[Classic] ${mac} ya estaba conectado: se reutiliza la conexión`);
             this.classicDevice = d;
-            this.configurarMonitoreoClassic(this.classicDevice, mac, onDesconexion, onDatos);
+            this.configurarMonitoreoClassic(this.classicDevice, onDesconexion, onDatos);
             return;
           }
-        } catch {}
+        } catch (e2) {
+          LogService.warn('[Classic] No se pudo recuperar la conexión existente', e2);
+        }
       }
     }
 
@@ -442,16 +510,17 @@ class BluetoothServiceClass {
 
     try {
       await this._intentoSocketClassic(mac, { secure: true, secureSocket: true, delimiter: '\n' });
-      this.configurarMonitoreoClassic(this.classicDevice, mac, onDesconexion, onDatos);
+      this.configurarMonitoreoClassic(this.classicDevice, onDesconexion, onDatos);
     } catch (err2: any) {
       const msgErr2 = err2?.message || String(err2);
+      LogService.error(`[Classic] Segundo intento (socket seguro) fallido: ${msgErr2}`, err2);
       const combined = `${err1} | ${msgErr2}`.toLowerCase();
       if (
         combined.includes('securityexception') ||
         combined.includes('lacks permission') ||
         combined.includes('permission')
       ) {
-        throw new Error('Falta permiso de Bluetooth en el sistema. Por favor, abre los Ajustes de la aplicación y concede los permisos de Bluetooth y Dispositivos cercanos.');
+        throw new Error(t('pl_error_permisos_sistema', { permiso: t('pl_dispositivos_cercanos') }));
       }
       throw new Error(`Fallo conexión Classic: ${err1} | ${msgErr2}`);
     }
@@ -479,7 +548,6 @@ class BluetoothServiceClass {
 
   private configurarMonitoreoClassic(
     dev: any,
-    mac: string,
     onDesconexion: () => void,
     onDatos: (data: string) => void
   ): void {
@@ -519,28 +587,28 @@ class BluetoothServiceClass {
     return () => { this.onDatosCallback = null; };
   }
 
-  private notificarDesconexion(): void {
-    if (this.onDesconexionCallback) this.onDesconexionCallback();
-  }
-
-  private notificarDatos(data: string): void {
-    if (this.onDatosCallback) this.onDatosCallback(data);
-  }
-
-  async conectar(macOrBleId: string, type: 'classic' | 'ble' = 'classic'): Promise<void> {
+  async conectar(macOrBleId: string, type: TipoDispositivo = 'classic'): Promise<void> {
+    LogService.info(`[Bluetooth] Conectando a ${macOrBleId} (tipo preferido: ${type})`);
     await this.desconectar();
-    const onDesc = () => this.notificarDesconexion();
-    const onDat = (d: string) => this.notificarDatos(d);
+    const onDesc = () => {
+      LogService.warn('[Bluetooth] Conexión perdida');
+      this.onDesconexionCallback?.();
+    };
+    const onDat = (d: string) => this.onDatosCallback?.(d);
 
     if (type === 'ble') {
       try {
         const idConectado = await this.conectarBLE(macOrBleId, onDesc, onDat);
         this.tipoActivo = 'ble';
         this.bleMacCache.set(macOrBleId, idConectado);
+        LogService.info(`[Bluetooth] Conectado por BLE (id=${idConectado})`);
       } catch (bleErr: any) {
+        LogService.warn('[Bluetooth] Falló la conexión BLE', bleErr);
         if (NativeModules.RNBluetoothClassic) {
+          LogService.info('[Bluetooth] Se prueba Classic como alternativa');
           await this.conectarClassic(macOrBleId, onDesc, onDat);
           this.tipoActivo = 'classic';
+          LogService.info('[Bluetooth] Conectado por Classic (alternativa)');
         } else {
           throw bleErr;
         }
@@ -549,13 +617,18 @@ class BluetoothServiceClass {
       try {
         await this.conectarClassic(macOrBleId, onDesc, onDat);
         this.tipoActivo = 'classic';
+        LogService.info('[Bluetooth] Conectado por Classic');
       } catch (classicErr: any) {
+        LogService.warn('[Bluetooth] Falló la conexión Classic', classicErr);
         const cachedBleId = this.bleMacCache.get(macOrBleId) || null;
         try {
+          LogService.info('[Bluetooth] Se prueba BLE como alternativa');
           const idConectado = await this.conectarBLE(cachedBleId, onDesc, onDat);
           this.tipoActivo = 'ble';
           this.bleMacCache.set(macOrBleId, idConectado);
-        } catch {
+          LogService.info(`[Bluetooth] Conectado por BLE (alternativa, id=${idConectado})`);
+        } catch (bleErr) {
+          LogService.error('[Bluetooth] Fallaron Classic y BLE: no hay conexión', bleErr);
           throw classicErr;
         }
       }
@@ -563,31 +636,33 @@ class BluetoothServiceClass {
   }
 
   async desconectar(): Promise<void> {
+    if (this.bleDevice || this.classicDevice) LogService.info('[Bluetooth] Desconectando');
     this.tipoActivo = null;
     this.limpiarSuscripcionesBLE();
     this.limpiarSuscripcionesClassic();
 
     if (this.bleDevice) {
-      try { await this.bleDevice.cancelConnection(); } catch {}
+      try { await this.bleDevice.cancelConnection(); } catch (e) { LogService.warn('[BLE] cancelConnection falló', e); }
       this.bleDevice = null;
     }
     if (this.classicDevice) {
-      try { await this.classicDevice.disconnect(); } catch {}
+      try { await this.classicDevice.disconnect(); } catch (e) { LogService.warn('[Classic] disconnect falló', e); }
       this.classicDevice = null;
     }
   }
 
-  async estaConectado(type?: 'classic' | 'ble'): Promise<boolean> {
-    if (type === 'classic') return this.classicDevice ? await this.classicDevice.isConnected().catch(() => false) : false;
-    if (type === 'ble') return this.bleDevice ? await this.bleDevice.isConnected().catch(() => false) : false;
-    const cOk = this.classicDevice ? await this.classicDevice.isConnected().catch(() => false) : false;
-    const bOk = this.bleDevice ? await this.bleDevice.isConnected().catch(() => false) : false;
-    return cOk || bOk;
+  async estaConectado(): Promise<boolean> {
+    const [classic, ble] = await Promise.all([
+      this.classicDevice?.isConnected().catch(() => false),
+      this.bleDevice?.isConnected().catch(() => false),
+    ]);
+    return !!(classic || ble);
   }
 
-  async enviarComando(comando: string, type?: 'classic' | 'ble'): Promise<void> {
+  async enviarComando(comando: string, type?: TipoDispositivo): Promise<void> {
     const payload = comando.endsWith('\n') ? comando : comando + '\n';
     const destino = type || this.tipoActivo;
+    if (!comando.startsWith('PLK:LOG:')) LogService.info(`[TX] ${enmascarar(comando)} (destino=${destino})`);
 
     if (destino === 'ble') {
       await this.enviarBLE(payload);
@@ -601,11 +676,11 @@ class BluetoothServiceClass {
 
   async enviarComandoConRespuesta(
     comando: string,
-    type?: 'classic' | 'ble',
+    type?: TipoDispositivo,
     timeoutMs = 4000
   ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      let timer: NodeJS.Timeout | null = null;
+      let timer: ReturnType<typeof setTimeout> | null = null;
       const callbackPrevio = this.onDatosCallback;
 
       const limpiar = () => {
@@ -615,6 +690,7 @@ class BluetoothServiceClass {
 
       timer = setTimeout(() => {
         limpiar();
+        LogService.warn(`[TX] Sin respuesta del dispositivo en ${timeoutMs} ms a ${enmascarar(comando)}: se da por enviado`);
         resolve('OK:TIMEOUT_FALLBACK');
       }, timeoutMs);
 
@@ -632,70 +708,35 @@ class BluetoothServiceClass {
       });
     });
   }
-
-  private toBase64(str: string): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    let output = '';
-    for (let i = 0; i < str.length; i += 3) {
-      const c1 = str.charCodeAt(i) & 0xff;
-      const c2 = i + 1 < str.length ? str.charCodeAt(i + 1) & 0xff : 0;
-      const c3 = i + 2 < str.length ? str.charCodeAt(i + 2) & 0xff : 0;
-      output += chars.charAt(c1 >> 2) +
-                chars.charAt(((c1 & 3) << 4) | (c2 >> 4)) +
-                (i + 1 >= str.length ? '=' : chars.charAt(((c2 & 15) << 2) | (c3 >> 6))) +
-                (i + 2 >= str.length ? '=' : chars.charAt(c3 & 63));
-    }
-    return output;
-  }
-
-  private fromBase64(b64: string): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    let output = '';
-    const clean = b64.replace(/[^A-Za-z0-9+/=]/g, '');
-    for (let i = 0; i < clean.length; i += 4) {
-      const b1 = chars.indexOf(clean.charAt(i));
-      const b2 = chars.indexOf(clean.charAt(i + 1));
-      const b3 = chars.indexOf(clean.charAt(i + 2));
-      const b4 = chars.indexOf(clean.charAt(i + 3));
-      output += String.fromCharCode((b1 << 2) | (b2 >> 4));
-      if (b3 !== -1 && clean.charAt(i + 2) !== '=') output += String.fromCharCode(((b2 & 15) << 4) | (b3 >> 2));
-      if (b4 !== -1 && clean.charAt(i + 3) !== '=') output += String.fromCharCode(((b3 & 3) << 6) | b4);
-    }
-    return output;
-  }
 }
 
 export const BluetoothService = new BluetoothServiceClass();
-
-// =============================================================================
-// 3. STORE GLOBAL REACTIVO (ZUSTAND)
-// =============================================================================
 
 export interface PocketState {
   status: BluetoothStatus;
   deviceName: string | null;
   deviceMac: string | null;
-  deviceType: 'classic' | 'ble';
+  deviceType: TipoDispositivo;
   devicePin: string;
   cargando: boolean;
   tiempoRestanteBloqueo: number;
   userName: string | null;
-  ultimaPuerta: 'peatonal' | 'garaje';
+  ultimaPuerta: Puerta;
 }
 
 export interface PocketActions {
   iniciarBloqueoMargen: (segundos?: number) => void;
   guardarNombreUsuario: (nombre: string) => Promise<void>;
-  guardarUltimaPuerta: (puerta: 'peatonal' | 'garaje') => Promise<void>;
+  guardarUltimaPuerta: (puerta: Puerta) => Promise<void>;
   conectar: () => Promise<void>;
-  conectarDispositivo: (macAddress: string, type?: 'classic' | 'ble') => Promise<void>;
+  conectarDispositivo: (macAddress: string, type?: TipoDispositivo) => Promise<void>;
   desconectar: () => Promise<void>;
   pedirActivar: () => Promise<boolean>;
   enviarComando: (comando: string) => Promise<void>;
   actualizarDispositivoVinculado: (
     mac: string,
     name: string,
-    type?: 'classic' | 'ble',
+    type?: TipoDispositivo,
     pin?: string,
     userName?: string
   ) => Promise<void>;
@@ -705,7 +746,6 @@ export interface PocketActions {
   inicializar: () => Promise<void>;
   resetStore: () => void;
   setStatus: (status: BluetoothStatus) => void;
-  setCargando: (cargando: boolean) => void;
 }
 
 export type PocketStore = PocketState & PocketActions;
@@ -728,7 +768,6 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
   ...initialPocketState,
 
   setStatus: (status: BluetoothStatus) => set({ status }),
-  setCargando: (cargando: boolean) => set({ cargando }),
 
   resetStore: () => {
     if (bloqueoIntervalId) {
@@ -761,7 +800,7 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
     if (stored.mac) {
       await StorageService.saveDevice(
         stored.mac,
-        stored.name || 'Pocket Locker',
+        stored.name || t('pl_app_titulo'),
         stored.type,
         stored.pin || DEFAULT_SECURITY_PIN,
         limpio
@@ -769,15 +808,16 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
     }
   },
 
-  guardarUltimaPuerta: async (puerta: 'peatonal' | 'garaje') => {
+  guardarUltimaPuerta: async (puerta: Puerta) => {
     set({ ultimaPuerta: puerta });
     await StorageService.saveUltimaPuerta(puerta);
   },
 
-  conectarDispositivo: async (macAddress: string, type: 'classic' | 'ble' = 'classic') => {
+  conectarDispositivo: async (macAddress: string, type: TipoDispositivo = 'classic') => {
     if (!macAddress) return;
     if (get().status === 'connected' && get().deviceMac === macAddress) return;
 
+    LogService.info(`[Store] conectarDispositivo ${macAddress} (${type})`);
     set({ status: 'connecting' });
     try {
       const soportado = await BluetoothService.esSoportado();
@@ -793,12 +833,14 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
       const okPermisos = await BluetoothService.solicitarPermisos();
       if (!okPermisos) {
         set({ status: 'unauthorized' });
-        throw new Error('Permisos de Bluetooth o dispositivos cercanos no concedidos');
+        throw new Error(t('pl_error_permisos'));
       }
       await BluetoothService.conectar(macAddress, type);
       set({ status: 'connected' });
+      LogService.info(`[Store] Conectado a ${macAddress}`);
       sincronizarLogsConESP32().catch(() => {});
     } catch (e: any) {
+      LogService.error(`[Store] No se pudo conectar a ${macAddress}`, e);
       set({ status: 'disconnected' });
       throw e;
     }
@@ -822,7 +864,8 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
   pedirActivar: async () => {
     try {
       return await BluetoothService.pedirActivar();
-    } catch {
+    } catch (e) {
+      LogService.error('[Store] pedirActivar falló', e);
       return false;
     }
   },
@@ -833,15 +876,17 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
       const type = get().deviceType || (await StorageService.getDeviceType());
       const currentPin = get().devicePin || (await StorageService.getDevicePin());
 
-      if (!mac) throw new Error('No hay ningún dispositivo Pocket Locker vinculado');
+      if (!mac) throw new Error(`No hay ningún dispositivo ${t('pl_app_titulo')} vinculado`);
       if (get().status !== 'connected') await get().conectarDispositivo(mac, type);
 
-      const payload = comando.startsWith('PLK:') || comando.includes(':')
+      const payload = comando.includes(':')
         ? comando
         : `PLK:${currentPin}:${comando}`;
 
-      await BluetoothService.enviarComandoConRespuesta(payload, type);
+      const respuesta = await BluetoothService.enviarComandoConRespuesta(payload, type);
+      LogService.info(`[Store] Respuesta del dispositivo: ${respuesta}`);
     } catch (e: any) {
+      LogService.error(`[Store] Error al enviar el comando ${enmascarar(comando)}`, e);
       if (
         e?.message?.includes('socket') ||
         e?.message?.includes('connect') ||
@@ -856,11 +901,11 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
   actualizarDispositivoVinculado: async (
     mac: string,
     name: string,
-    type: 'classic' | 'ble' = 'classic',
+    type: TipoDispositivo = 'classic',
     pin: string = DEFAULT_SECURITY_PIN,
     user?: string
   ) => {
-    const usuarioFinal = user || get().userName || (await StorageService.getUserName()) || 'Usuario';
+    const usuarioFinal = user || get().userName || (await StorageService.getUserName()) || USUARIO_POR_DEFECTO;
     try {
       await StorageService.saveDevice(mac, name, type, pin, usuarioFinal);
       set({
@@ -883,9 +928,7 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
   },
 
   actualizarNombreDispositivo: async (nuevoNombre: string) => {
-    const limpio = nuevoNombre.trim() || 'Pocket Locker';
-    await StorageService.saveDeviceName(limpio);
-    set({ deviceName: limpio });
+    set({ deviceName: await StorageService.saveDeviceName(nuevoNombre) });
   },
 
   desvincularDispositivo: async () => {
@@ -913,29 +956,16 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
         StorageService.getUltimaPuerta(),
       ]);
       const { mac, name, userName: uName, type, pin } = dispositivo;
-      const effectiveUser = uName || savedUserName || null;
 
-      if (mac) {
-        set({
-          deviceMac: mac,
-          deviceName: name,
-          deviceType: type || 'classic',
-          devicePin: pin || DEFAULT_SECURITY_PIN,
-          userName: effectiveUser,
-          status: 'disconnected',
-          ultimaPuerta: savedUltimaPuerta || 'peatonal',
-        });
-      } else {
-        set({
-          deviceMac: null,
-          deviceName: null,
-          deviceType: 'classic',
-          devicePin: DEFAULT_SECURITY_PIN,
-          userName: effectiveUser,
-          status: 'unpaired',
-          ultimaPuerta: savedUltimaPuerta || 'peatonal',
-        });
-      }
+      set({
+        deviceMac: mac,
+        deviceName: mac ? name : null,
+        deviceType: mac ? type : 'classic',
+        devicePin: mac ? pin : DEFAULT_SECURITY_PIN,
+        userName: uName || savedUserName || null,
+        status: mac ? 'disconnected' : 'unpaired',
+        ultimaPuerta: savedUltimaPuerta,
+      });
     } catch (e) {
       LogService.error('Error cargando dispositivo al inicio', e);
       set({ status: 'unpaired' });
@@ -944,10 +974,6 @@ export const usePocketStore = create<PocketStore>((set, get) => ({
     }
   },
 }));
-
-// =============================================================================
-// 4. CONTEXTO REACT Y CICLO DE VIDA (BLUETOOTH PROVIDER)
-// =============================================================================
 
 export type BluetoothContextType = PocketStore;
 
@@ -978,7 +1004,7 @@ const BluetoothContext = createContext<BluetoothContextType | undefined>(undefin
 
 export function BluetoothProvider({ children }: { children: React.ReactNode }) {
   const store = usePocketStore();
-  const appStateDebounceTimer = useRef<NodeJS.Timeout | null>(null);
+  const appStateDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     usePocketStore.getState().inicializar();
@@ -999,14 +1025,18 @@ export function BluetoothProvider({ children }: { children: React.ReactNode }) {
 
     const handleAppStateChange = async (nextAppState: AppStateStatus) => {
       if (appStateDebounceTimer.current) clearTimeout(appStateDebounceTimer.current);
+      LogService.info(`[App] Estado de la aplicación: ${nextAppState}`);
 
       if (nextAppState === 'active') {
         appStateDebounceTimer.current = setTimeout(async () => {
           try {
             if (!(await BluetoothService.estaEncendido())) {
-              await BluetoothService.pedirActivar().catch(() => {});
+              LogService.warn('[App] Bluetooth apagado al volver a la aplicación');
+              await BluetoothService.pedirActivar(false).catch((e) => LogService.warn('[App] pedirActivar(false) falló', e));
             }
-          } catch {}
+          } catch (e) {
+            LogService.warn('[App] No se pudo comprobar el Bluetooth al volver a la aplicación', e);
+          }
 
           const currentStore = usePocketStore.getState();
           const mac = currentStore.deviceMac || (await StorageService.getDeviceMac());
@@ -1025,16 +1055,22 @@ export function BluetoothProvider({ children }: { children: React.ReactNode }) {
     let onEnabledSub: any = null;
     let onDisabledSub: any = null;
 
-    if (NativeModules.RNBluetoothClassic && (RNBluetoothClassic as any)._nativeModule) {
-      onEnabledSub = RNBluetoothClassic.onBluetoothEnabled(async () => {
-        const currentStore = usePocketStore.getState();
-        const mac = currentStore.deviceMac || (await StorageService.getDeviceMac());
-        currentStore.setStatus(mac ? 'disconnected' : 'unpaired');
-      });
+    try {
+      if (NativeModules.RNBluetoothClassic && (RNBluetoothClassic as any)._nativeModule) {
+        onEnabledSub = RNBluetoothClassic.onBluetoothEnabled(async () => {
+          LogService.info('[Bluetooth] El Bluetooth se ha encendido');
+          const currentStore = usePocketStore.getState();
+          const mac = currentStore.deviceMac || (await StorageService.getDeviceMac());
+          currentStore.setStatus(mac ? 'disconnected' : 'unpaired');
+        });
 
-      onDisabledSub = RNBluetoothClassic.onBluetoothDisabled(() => {
-        usePocketStore.getState().setStatus('disabled');
-      });
+        onDisabledSub = RNBluetoothClassic.onBluetoothDisabled(() => {
+          LogService.warn('[Bluetooth] El Bluetooth se ha apagado');
+          usePocketStore.getState().setStatus('disabled');
+        });
+      }
+    } catch (e) {
+      LogService.warn('[Bluetooth] No se pudieron registrar los listeners de estado', e);
     }
 
     return () => {

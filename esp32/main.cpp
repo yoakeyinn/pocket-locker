@@ -33,8 +33,20 @@
 #define PIN_RELE_PUERTA   27  // GPIO relé de la puerta peatonal
 
 // Lógica de activación de relés (módulos optoacoplados con lógica inversa activa en LOW)
+// MODO_LEDS_PRUEBA=1 -> LEDs de prueba (GPIO -> resistencia -> LED -> GND), activos en ALTO.
+// MODO_LEDS_PRUEBA=0 -> modulo de reles real (activo en BAJO). Por defecto: reles.
+// Se activa con el entorno de PlatformIO 'esp32dev_leds' (ver platformio.ini).
+#ifndef MODO_LEDS_PRUEBA
+#define MODO_LEDS_PRUEBA 0
+#endif
+
+#if MODO_LEDS_PRUEBA
+#define RELE_ACTIVAR      HIGH
+#define RELE_DESACTIVAR   LOW
+#else
 #define RELE_ACTIVAR      LOW
 #define RELE_DESACTIVAR   HIGH
+#endif
 
 static const char* const BT_DEVICE_NAME  = "PLBT";
 static const char* const ADMIN_PIN       = "2415";
@@ -1025,6 +1037,9 @@ void setup() {
 
   // 2. Puerto serie para depuración y telemetría
   Serial.begin(115200);
+#if MODO_LEDS_PRUEBA
+  Serial.println(F("[AVISO] MODO_LEDS_PRUEBA activo: salidas activas en ALTO. NO conectar el modulo de reles."));
+#endif
   Serial.println();
   Serial.println(F("================================================="));
   Serial.println(F("[POCKET LOCKER] Firmware v5.5 - Dual BT Monolitico"));

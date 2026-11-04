@@ -1,4 +1,3 @@
-// Polyfills requeridos en el entorno de ejecución de React Native / Expo
 if (typeof global.DOMException === 'undefined') {
   global.DOMException = Error;
 }

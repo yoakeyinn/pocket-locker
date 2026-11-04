@@ -1,10 +1,10 @@
+import { t } from '../styles/i18n';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system/legacy';
+import { DEFAULT_SECURITY_PIN, Puerta, TipoDispositivo, USUARIO_POR_DEFECTO } from './comun';
 
-// ==========================================
-// 1. LOG SERVICE (Auditoría y Diagnóstico)
-// ==========================================
+export { DEFAULT_SECURITY_PIN };
 
 export interface LogEntry {
   timestamp: string;
@@ -15,6 +15,8 @@ export interface LogEntry {
 
 type LogListener = (logs: LogEntry[]) => void;
 type RemoteForwarder = (level: string, message: string) => void;
+
+const rutaLogs = () => (FileSystem.documentDirectory ? `${FileSystem.documentDirectory}plk-logs.json` : null);
 
 class LogServiceClass {
   private logs: LogEntry[] = [];
@@ -31,7 +33,7 @@ class LogServiceClass {
     if (!extra) return '';
     try {
       const seen = new WeakSet();
-      return JSON.stringify(extra, (key, value) => {
+      return JSON.stringify(extra, (_clave, value) => {
         if (value instanceof Error) {
           return { name: value.name, message: value.message, stack: value.stack };
         }
@@ -79,8 +81,8 @@ class LogServiceClass {
 
   async persistirEnArchivo(): Promise<void> {
     try {
-      if (!FileSystem.documentDirectory) return;
-      const path = FileSystem.documentDirectory + 'plk-logs.json';
+      const path = rutaLogs();
+      if (!path) return;
       await FileSystem.writeAsStringAsync(path, JSON.stringify(this.logs, null, 2), {
         encoding: FileSystem.EncodingType.UTF8,
       });
@@ -100,7 +102,7 @@ class LogServiceClass {
 
   error(message: string, extra?: any) {
     this.addLog('error', message, extra);
-    if (__DEV__) console.error(`[ERROR] ${message}`, extra ? extra : '');
+    if (__DEV__) console.log(`[ERROR] ${message}`, extra ? extra : '');
   }
 
   getLogs(): LogEntry[] {
@@ -112,8 +114,8 @@ class LogServiceClass {
     this.nuevosDesdePersistencia = 0;
     this.listeners.forEach((listener) => listener([]));
     try {
-      if (!FileSystem.documentDirectory) return;
-      const path = FileSystem.documentDirectory + 'plk-logs.json';
+      const path = rutaLogs();
+      if (!path) return;
       const info = await FileSystem.getInfoAsync(path);
       if (info.exists) {
         await FileSystem.deleteAsync(path, { idempotent: true });
@@ -131,10 +133,6 @@ class LogServiceClass {
 }
 
 export const LogService = new LogServiceClass();
-
-// ==========================================
-// 2. CRYPTO SERVICE (HMAC-SHA256)
-// ==========================================
 
 function stringToUtf8ByteArray(str: string): Uint8Array {
   const bytes: number[] = [];
@@ -265,111 +263,6 @@ export class CryptoService {
   }
 }
 
-// ==========================================
-// 3. BIOMETRIC SERVICE (Huella / FaceID)
-// ==========================================
-
-let cachedLocalAuth: typeof import('expo-local-authentication') | null | undefined;
-
-function getLocalAuth(): typeof import('expo-local-authentication') | null {
-  if (cachedLocalAuth !== undefined) return cachedLocalAuth;
-  try {
-    cachedLocalAuth = require('expo-local-authentication');
-  } catch {
-    cachedLocalAuth = null;
-  }
-  return cachedLocalAuth ?? null;
-}
-
-export interface ResultadoAutenticacionBiometrica {
-  exito: boolean;
-  cancelado?: boolean;
-  mensajeError?: string;
-  requiereBuild?: boolean;
-}
-
-class BiometricServiceClass {
-  async soportaBiometria(): Promise<boolean> {
-    const auth = getLocalAuth();
-    if (!auth) return false;
-    try {
-      return await auth.hasHardwareAsync();
-    } catch (e: any) {
-      LogService.error('Error comprobando soporte biométrico', e);
-      return false;
-    }
-  }
-
-  async tieneBiometriaRegistrada(): Promise<boolean> {
-    const auth = getLocalAuth();
-    if (!auth) return false;
-    try {
-      return await auth.isEnrolledAsync();
-    } catch (e: any) {
-      LogService.error('Error comprobando huellas registradas', e);
-      return false;
-    }
-  }
-
-  async autenticarParaEditarPin(): Promise<ResultadoAutenticacionBiometrica> {
-    return this.autenticar(
-      'Identificación requerida',
-      'Verifica tu huella dactilar para ver y modificar el PIN',
-      'Usar código del teléfono'
-    );
-  }
-
-  async autenticarParaDesbloquearApp(
-    subtitulo: string = 'Identifícate para acceder a Pocket Locker'
-  ): Promise<ResultadoAutenticacionBiometrica> {
-    return this.autenticar(
-      'Desbloqueo de Pocket Locker',
-      subtitulo,
-      'Usar PIN de la app'
-    );
-  }
-
-  private async autenticar(
-    promptMessage: string,
-    promptSubtitle: string,
-    fallbackLabel: string
-  ): Promise<ResultadoAutenticacionBiometrica> {
-    try {
-      const auth = getLocalAuth();
-      if (!auth) return { exito: false, requiereBuild: true, mensajeError: 'Módulo biométrico nativo no disponible.' };
-
-      const soporta = await this.soportaBiometria();
-      if (!soporta) return { exito: false, mensajeError: 'Tu dispositivo no cuenta con sensor biométrico activo.' };
-
-      const registrada = await this.tieneBiometriaRegistrada();
-      if (!registrada) return { exito: false, mensajeError: 'No tienes ninguna huella dactilar configurada en los Ajustes del móvil.' };
-
-      const res = await auth.authenticateAsync({
-        promptMessage,
-        promptSubtitle,
-        cancelLabel: 'Cancelar',
-        fallbackLabel,
-        disableDeviceFallback: false,
-      });
-
-      if (res.success) return { exito: true };
-      if (res.error === 'user_cancel' || res.error === 'app_cancel' || res.error === 'system_cancel') {
-        return { exito: false, cancelado: true, mensajeError: 'Autenticación cancelada' };
-      }
-      return { exito: false, mensajeError: res.warning || 'No se pudo verificar tu huella dactilar.' };
-    } catch (e: any) {
-      LogService.error('Error durante autenticación biométrica', e);
-      return { exito: false, mensajeError: e?.message || 'Error inesperado al solicitar autenticación biométrica.' };
-    }
-  }
-}
-
-export const BiometricService = new BiometricServiceClass();
-
-// ==========================================
-// 4. STORAGE SERVICE (Persistencia y PIN)
-// ==========================================
-
 const KEYS = {
   DEVICE_MAC: 'deviceMac',
   DEVICE_NAME: 'deviceName',
@@ -377,54 +270,16 @@ const KEYS = {
   DEVICE_PIN: 'devicePin_secure',
   ULTIMA_PUERTA: 'ultima_puerta_activa',
   USER_NAME: 'user_name_registrado',
-  APP_LOCK_ENABLED: 'app_lock_enabled',
-  APP_LOCK_MODE: 'app_lock_mode',
-  APP_LOCK_PIN: 'app_lock_pin_secure',
-  APP_CUSTOM_NAME: 'app_custom_name',
-  APP_CUSTOM_ICON: 'app_custom_icon',
-  APP_THEME_MODE: 'app_theme_mode',
-  APP_THEME_COLOR: 'app_theme_color',
 };
 
-export interface AppLockConfig {
-  enabled: boolean;
-  mode: 'biometric' | 'pin';
-  pin: string;
-}
-
-export interface AppCustomPreferences {
-  appName: string;
-  appIcon: string;
-  themeMode: 'light' | 'dark' | 'system';
-  themeColor: string;
-}
-
-export const DEFAULT_SECURITY_PIN = '2415';
-
-export interface InfoPinParsed {
-  esValido: boolean;
-  esAdmin: boolean;
-  peatonal: boolean;
-  garaje: boolean;
-  dias: number | null;
-  mensajeError?: string;
-}
-
-export function parsearYValidarPin(pin?: string | null): InfoPinParsed {
-  if (!pin || typeof pin !== 'string') {
-    return { esValido: false, esAdmin: false, peatonal: false, garaje: false, dias: null, mensajeError: 'El PIN no puede estar vacío.' };
-  }
-  if (pin.trim().toUpperCase() === DEFAULT_SECURITY_PIN) {
-    return { esValido: true, esAdmin: false, peatonal: true, garaje: true, dias: null };
-  }
-  return { esValido: false, esAdmin: false, peatonal: false, garaje: false, dias: null, mensajeError: 'Código incorrecto. Introduce el PIN 2415.' };
-}
+export const esPinValido = (pin?: string | null): boolean =>
+  typeof pin === 'string' && pin.trim().toUpperCase() === DEFAULT_SECURITY_PIN;
 
 export interface DispositivoGuardado {
   mac: string | null;
   name: string | null;
   userName: string | null;
-  type: 'classic' | 'ble';
+  type: TipoDispositivo;
   pin: string;
 }
 
@@ -451,17 +306,14 @@ class StorageServiceClass {
     return this.getItem(KEYS.DEVICE_MAC);
   }
 
-  async getDeviceName(): Promise<string | null> {
-    return this.getItem(KEYS.DEVICE_NAME);
-  }
-
-  async saveDeviceName(name: string): Promise<void> {
-    const limpio = name.trim() || 'Pocket Locker';
+  async saveDeviceName(name: string): Promise<string> {
+    const limpio = name.trim() || t('pl_app_titulo');
     await this.setItem(KEYS.DEVICE_NAME, limpio);
     LogService.info(`Nombre de dispositivo guardado: ${limpio}`);
+    return limpio;
   }
 
-  async getDeviceType(): Promise<'classic' | 'ble'> {
+  async getDeviceType(): Promise<TipoDispositivo> {
     const type = await this.getItem(KEYS.DEVICE_TYPE);
     return type === 'ble' ? 'ble' : 'classic';
   }
@@ -477,110 +329,28 @@ class StorageServiceClass {
     LogService.info(`Nombre de usuario guardado: ${limpio}`);
   }
 
-  async getUltimaPuerta(): Promise<'peatonal' | 'garaje'> {
+  async getUltimaPuerta(): Promise<Puerta> {
     const puerta = await this.getItem(KEYS.ULTIMA_PUERTA);
     return puerta === 'garaje' ? 'garaje' : 'peatonal';
   }
 
-  async saveUltimaPuerta(puerta: 'peatonal' | 'garaje'): Promise<void> {
+  async saveUltimaPuerta(puerta: Puerta): Promise<void> {
     await this.setItem(KEYS.ULTIMA_PUERTA, puerta);
     LogService.info(`Última puerta guardada: ${puerta}`);
   }
 
-  async getAppLockConfig(): Promise<AppLockConfig> {
-    try {
-      const [enabledVal, modeVal] = await AsyncStorage.multiGet([KEYS.APP_LOCK_ENABLED, KEYS.APP_LOCK_MODE]);
-      let pinVal = '';
-      try {
-        pinVal = (await SecureStore.getItemAsync(KEYS.APP_LOCK_PIN)) || '';
-      } catch {
-        pinVal = (await AsyncStorage.getItem(KEYS.APP_LOCK_PIN)) || '';
-      }
-      return {
-        enabled: enabledVal[1] === 'true',
-        mode: (modeVal[1] === 'biometric' ? 'biometric' : 'pin') as 'biometric' | 'pin',
-        pin: pinVal,
-      };
-    } catch (e) {
-      LogService.error('Error leyendo configuración de bloqueo', e);
-      return { enabled: false, mode: 'pin', pin: '' };
-    }
-  }
-
-  async saveAppLockConfig(config: AppLockConfig): Promise<void> {
-    try {
-      await AsyncStorage.multiSet([
-        [KEYS.APP_LOCK_ENABLED, config.enabled ? 'true' : 'false'],
-        [KEYS.APP_LOCK_MODE, config.mode],
-      ]);
-      if (config.pin) {
-        try {
-          await SecureStore.setItemAsync(KEYS.APP_LOCK_PIN, config.pin);
-        } catch {
-          await AsyncStorage.setItem(KEYS.APP_LOCK_PIN, config.pin);
-        }
-      }
-      LogService.info('Configuración de bloqueo guardada');
-    } catch (e) {
-      LogService.error('Error guardando configuración de bloqueo', e);
-      throw e;
-    }
-  }
-
-  async getAppCustomPreferences(): Promise<AppCustomPreferences> {
-    try {
-      const vals = await AsyncStorage.multiGet([
-        KEYS.APP_CUSTOM_NAME,
-        KEYS.APP_CUSTOM_ICON,
-        KEYS.APP_THEME_MODE,
-        KEYS.APP_THEME_COLOR,
-      ]);
-      return {
-        appName: vals[0][1] || 'Pocket Locker',
-        appIcon: vals[1][1] || 'clasico',
-        themeMode: (vals[2][1] as any) || 'light',
-        themeColor: vals[3][1] || 'azul',
-      };
-    } catch (e) {
-      LogService.error('Error leyendo preferencias estéticas', e);
-      return { appName: 'Pocket Locker', appIcon: 'clasico', themeMode: 'light', themeColor: 'azul' };
-    }
-  }
-
-  async saveAppCustomPreferences(prefs: Partial<AppCustomPreferences>): Promise<void> {
-    const keyMap: Record<keyof AppCustomPreferences, string> = {
-      appName: KEYS.APP_CUSTOM_NAME,
-      appIcon: KEYS.APP_CUSTOM_ICON,
-      themeMode: KEYS.APP_THEME_MODE,
-      themeColor: KEYS.APP_THEME_COLOR,
-    };
-    const items = (Object.entries(prefs) as [keyof AppCustomPreferences, string][])
-      .filter(([k, v]) => v !== undefined && keyMap[k])
-      .map(([k, v]) => [keyMap[k], v] as [string, string]);
-
-    if (items.length > 0) {
-      await AsyncStorage.multiSet(items).catch((e) => LogService.error('Error guardando preferencias', e));
-      LogService.info('Preferencias estéticas de la app guardadas');
-    }
-  }
-
   async getDevicePin(): Promise<string> {
-    try {
-      const securePin = await SecureStore.getItemAsync(KEYS.DEVICE_PIN);
-      if (securePin && securePin.trim().length > 0) return securePin.trim();
-
-      const fallbackPin = await AsyncStorage.getItem(KEYS.DEVICE_PIN);
-      if (fallbackPin && fallbackPin.trim().length > 0) return fallbackPin.trim();
-
-      return DEFAULT_SECURITY_PIN;
-    } catch (e) {
+    const lecturas = [
+      () => SecureStore.getItemAsync(KEYS.DEVICE_PIN),
+      () => AsyncStorage.getItem(KEYS.DEVICE_PIN),
+    ];
+    for (const leer of lecturas) {
       try {
-        const pin = await AsyncStorage.getItem(KEYS.DEVICE_PIN);
-        return pin && pin.trim().length > 0 ? pin.trim() : DEFAULT_SECURITY_PIN;
-      } catch {
-        return DEFAULT_SECURITY_PIN;
-      }
+        const pin = (await leer())?.trim();
+        if (pin) return pin;
+      } catch {}
     }
+    return DEFAULT_SECURITY_PIN;
   }
 
   async saveDevicePin(pin: string): Promise<void> {
@@ -600,9 +370,9 @@ class StorageServiceClass {
   async saveDevice(
     mac: string,
     name: string,
-    type: 'classic' | 'ble' = 'classic',
+    type: TipoDispositivo = 'classic',
     pin: string = DEFAULT_SECURITY_PIN,
-    userName: string = 'Usuario'
+    userName: string = USUARIO_POR_DEFECTO
   ): Promise<void> {
     try {
       await AsyncStorage.multiSet([
@@ -654,8 +424,8 @@ class StorageServiceClass {
         mac: mapa[KEYS.DEVICE_MAC] || null,
         name: mapa[KEYS.DEVICE_NAME] || null,
         userName: mapa[KEYS.USER_NAME] || null,
-        type: (mapa[KEYS.DEVICE_TYPE] === 'ble' ? 'ble' : 'classic') as 'classic' | 'ble',
-        pin: pin || DEFAULT_SECURITY_PIN,
+        type: (mapa[KEYS.DEVICE_TYPE] === 'ble' ? 'ble' : 'classic') as TipoDispositivo,
+        pin,
       };
     } catch (e) {
       LogService.error('Error leyendo dispositivo desde storage', e);
