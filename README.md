@@ -32,7 +32,14 @@ Los relés se activan en nivel bajo. Para probar con LEDs (GPIO → resistencia 
    npx expo prebuild
    npx expo run:android   # o: npx expo run:ios (requiere Mac con Xcode)
    ```
-4. **Vincular:** con el Bluetooth encendido, abre la app. Detecta el PLBT por sí sola y te pide confirmar; si no, pulsa *Ver dispositivos manualmente*, elige **PLBT** e introduce el PIN. Después usa *Puerta* o *Garaje* en la pantalla principal.
+4. **Vincular:** la primera vez la app te pide tu nombre. Con el Bluetooth encendido, detecta el PLBT por sí sola y te pide confirmar; si no, pulsa *Ver dispositivos manualmente*, elige **PLBT** e introduce el código de acceso. Después usa *Puerta* o *Garaje* en la pantalla principal.
+
+### Códigos de acceso
+
+- **`2415`**: administrador, abre las dos puertas.
+- **`2S0BP<p>G<g>[dd]`**: usuario. `p` y `g` valen 1 o 0 y autorizan la puerta peatonal y el garaje (no pueden ser 0 los dos); `dd` (1-99) son los días de acceso, opcionales. Ejemplos: `2S0BP1G1` (ambas), `2S0BP1G0` (solo peatonal), `2S0BP0G103` (solo garaje, 3 días).
+
+La app solo enseña las puertas que autoriza el código; las restricciones reales las aplica el ESP32.
 
 ## Probar la app sin ESP32
 

@@ -7,18 +7,18 @@ import {
   useWindowDimensions,
   FlatList,
   RefreshControl,
-  TextInputProps,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { Aparece, retrasoEscalonado } from '../Aparece';
 import { Boton } from '../Boton';
+import { Campo } from '../Campo';
 import { Cargando } from '../Cargando';
 import { Estrella } from '../Estrella';
 import { Modal } from '../Modal';
 import { DispositivoBT, SIN_NOMBRE } from '../../services/BluetoothService';
 import { DEFAULT_SECURITY_PIN, modoSimulacion } from '../../services/comun';
-import { Text, TextInput } from '../../styles/tipografia/Tipografia';
+import { Text } from '../../styles/tipografia/Tipografia';
 import { t } from '../../styles/i18n';
 import tw, { Colors, ESTRELLA_APAGADA, ESTRELLA_ENCENDIDA, cicloPulso, splashAnimacion, tipografia } from '../../styles/styles';
 
@@ -420,29 +420,6 @@ export const DeviceDiscoveryListView: React.FC<DeviceDiscoveryListViewProps> = (
   );
 };
 
-const ETIQUETA_CAMPO = 'text-xs font-light text-gray uppercase mb-1.5 tracking-widest';
-const CAMPO = 'border rounded-lg px-4 py-2.5 text-base font-light text-black bg-white';
-
-interface CampoProps extends TextInputProps {
-  id: string;
-  etiqueta: string;
-  error?: string | null;
-  clase?: string;
-}
-
-// Etiqueta + campo de texto + error debajo (a la derecha). Con error, el borde del campo se pone rojo.
-const Campo: React.FC<CampoProps> = ({ id, etiqueta, error, clase = '', ...resto }) => (
-  <View style={tw`${clase}`}>
-    <Text style={tw`${ETIQUETA_CAMPO}`}>{etiqueta}</Text>
-    <TextInput testID={`input-${id}`} style={tw`${CAMPO} ${error ? 'border-red' : 'border-silver'}`} {...resto} />
-    {error ? (
-      <Text testID={`error-${id}`} style={[tipografia.error, tw`mt-1.5`]}>
-        {error}
-      </Text>
-    ) : null}
-  </View>
-);
-
 export interface ModalVincularDispositivoProps {
   visible: boolean;
   guardando: boolean;
@@ -499,8 +476,8 @@ export const ModalVincularDispositivo: React.FC<ModalVincularDispositivoProps> =
         error={errorPin}
         value={pinSeguridad}
         onChangeText={setPinSeguridad}
-        keyboardType="number-pad"
-        maxLength={8}
+        autoCapitalize="characters"
+        maxLength={9}
       />
 
       {guardando && (

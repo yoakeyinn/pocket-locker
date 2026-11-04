@@ -27,7 +27,6 @@ jest.mock('../../src/services/BluetoothService', () => ({
 }));
 
 jest.mock('../../src/services/StorageService', () => ({
-  esPinValido: jest.fn(),
   DEFAULT_SECURITY_PIN: '2415',
   LogService: { warn: jest.fn() },
 }));

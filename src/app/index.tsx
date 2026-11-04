@@ -49,7 +49,7 @@ const animar = (valor: Animated.Value, duration: number, easing: (x: number) => 
   Animated.timing(valor, { toValue: 1, duration, easing, useNativeDriver: true });
 
 export default function SplashScreen() {
-  const { cargando, deviceMac } = useBluetooth();
+  const { cargando, deviceMac, userName } = useBluetooth();
   const { width, height } = useWindowDimensions();
   const medidas = splashMedidas(width, height);
   const [listo, setListo] = useState(false);
@@ -83,11 +83,11 @@ export default function SplashScreen() {
   useEffect(() => {
     if (!cargando && listo && apagado !== null) {
       Animated.timing(salida, { toValue: 0, duration: SPLASH_FUNDIDO_MS, useNativeDriver: true }).start(() => {
-        router.replace(deviceMac ? '/puertas' : '/buscar');
+        router.replace(!userName ? '/nombre' : deviceMac ? '/puertas' : '/buscar');
         if (apagado) avisarBluetoothApagado();
       });
     }
-  }, [cargando, listo, apagado, salida, deviceMac]);
+  }, [cargando, listo, apagado, salida, deviceMac, userName]);
 
   return (
     <Animated.View style={[splashEstilos.pantalla, { opacity: salida }]}>

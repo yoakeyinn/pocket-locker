@@ -9,7 +9,7 @@ import BluetoothService from '../../src/services/BluetoothService';
 
 const mockBt = BluetoothService as unknown as Record<string, jest.Mock>;
 
-const mockEstado = { cargando: true, deviceMac: null as string | null };
+const mockEstado = { cargando: true, deviceMac: null as string | null, userName: 'Ana' as string | null };
 jest.mock('../../src/services/BluetoothService', () => ({
   __esModule: true,
   default: {
@@ -68,7 +68,7 @@ describe('SplashScreen', () => {
     afterEach(() => jest.useRealTimers());
 
     it('pasa a /buscar tras 3 s si no hay dispositivo vinculado', async () => {
-      Object.assign(mockEstado, { cargando: false, deviceMac: null });
+      Object.assign(mockEstado, { cargando: false, deviceMac: null, userName: 'Ana' });
       await render(<SplashScreen />);
       await avanzar(2000);
       expect(router.replace).not.toHaveBeenCalled();
@@ -77,11 +77,19 @@ describe('SplashScreen', () => {
     });
 
     it('pasa a /puertas si hay dispositivo vinculado', async () => {
-      Object.assign(mockEstado, { cargando: false, deviceMac: 'AA:BB' });
+      Object.assign(mockEstado, { cargando: false, deviceMac: 'AA:BB', userName: 'Ana' });
       await render(<SplashScreen />);
       await avanzar(3000);
       await avanzar(1000);
       expect(router.replace).toHaveBeenCalledWith('/puertas');
+    });
+
+    it('pasa a /nombre si todavía no hay nombre de usuario, aunque haya dispositivo', async () => {
+      Object.assign(mockEstado, { cargando: false, deviceMac: 'AA:BB', userName: null });
+      await render(<SplashScreen />);
+      await avanzar(3000);
+      await avanzar(1000);
+      expect(router.replace).toHaveBeenCalledWith('/nombre');
     });
 
     it('espera mientras los datos siguen cargando', async () => {
@@ -102,7 +110,7 @@ describe('SplashScreen', () => {
       jest.useFakeTimers();
       (router.replace as jest.Mock).mockClear();
       (mostrarModal as jest.Mock).mockClear();
-      Object.assign(mockEstado, { cargando: false, deviceMac: null });
+      Object.assign(mockEstado, { cargando: false, deviceMac: null, userName: 'Ana' });
       Object.values(mockBt).forEach((f) => f.mockReset());
       mockBt.esSoportado.mockResolvedValue(true);
       mockBt.estaEncendido.mockResolvedValue(false);

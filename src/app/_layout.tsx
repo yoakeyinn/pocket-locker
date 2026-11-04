@@ -43,6 +43,7 @@ function Aplicacion() {
         }}
       >
         <Stack.Screen name="index" />
+        <Stack.Screen name="nombre" />
         <Stack.Screen name="buscar" />
         <Stack.Screen name="puertas" />
         <Stack.Screen name="ajustes" />

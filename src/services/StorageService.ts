@@ -272,9 +272,6 @@ const KEYS = {
   USER_NAME: 'user_name_registrado',
 };
 
-export const esPinValido = (pin?: string | null): boolean =>
-  typeof pin === 'string' && pin.trim().toUpperCase() === DEFAULT_SECURITY_PIN;
-
 export interface DispositivoGuardado {
   mac: string | null;
   name: string | null;

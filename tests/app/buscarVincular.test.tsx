@@ -4,7 +4,6 @@ import React from 'react';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { router } from 'expo-router';
 import BluetoothService from '../../src/services/BluetoothService';
-import { esPinValido } from '../../src/services/StorageService';
 import BuscarScreen from '../../src/app/buscar';
 
 const mockBluetooth = BluetoothService as unknown as Record<string, jest.Mock>;
@@ -29,7 +28,6 @@ jest.mock('../../src/services/BluetoothService', () => ({
 }));
 
 jest.mock('../../src/services/StorageService', () => ({
-  esPinValido: jest.fn(),
   LogService: { warn: jest.fn(), error: jest.fn(), info: jest.fn() },
 }));
 
@@ -79,7 +77,6 @@ describe('vincular desde la lista manual (errores dentro del modal)', () => {
     mockBluetooth.tienePermisos.mockResolvedValue(true);
     mockBluetooth.estaEncendido.mockResolvedValue(true);
     mockBluetooth.vincularDispositivo.mockResolvedValue(true);
-    (esPinValido as jest.Mock).mockImplementation((pin: string) => pin === '2415');
   });
 
   it('con el PIN vacío muestra el error bajo el campo del PIN y no empareja', async () => {
@@ -126,6 +123,14 @@ describe('vincular desde la lista manual (errores dentro del modal)', () => {
 
     expect(pantalla.getByText(/no se ha podido completar/)).toBeTruthy();
     expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it('acepta también un código de usuario 2S0BP y lo guarda tal cual', async () => {
+    const pantalla = await abrirModalDe('PLBT');
+    await vincular(pantalla, '2s0bp1g1');
+
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/puertas'));
+    expect(mockActualizar).toHaveBeenCalledWith('AA:BB', 'PLBT', 'classic', '2S0BP1G1', 'Ana');
   });
 
   it('con el locker y el PIN correcto empareja, guarda el dispositivo y entra en puertas', async () => {

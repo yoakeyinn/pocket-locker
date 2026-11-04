@@ -427,4 +427,53 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
     expect(getByText('Pulsar para abrir')).toBeTruthy();
     expect(queryByText('Abrir')).toBeNull();
   });
+
+  describe('código de acceso (permisos por puerta)', () => {
+    const conPin = (devicePin: string) =>
+      (useBluetooth as jest.Mock).mockReturnValue({ ...(useBluetooth as jest.Mock)(), devicePin });
+
+    it('el administrador (2415) ve las dos pestañas y los puntos para deslizar', async () => {
+      conPin('2415');
+      const { getByTestId, getByText, queryByTestId } = await render(<PuertasScreen />);
+      expect(getByTestId('tab-peatonal')).toBeTruthy();
+      expect(getByTestId('tab-garaje')).toBeTruthy();
+      expect(getByText('Desliza para cambiar')).toBeTruthy();
+      expect(queryByTestId('acceso-temporal')).toBeNull();
+    });
+
+    it('un código solo de garaje muestra únicamente esa puerta, aunque la última fuera la peatonal', async () => {
+      conPin('2S0BP0G1');
+      const { getByTestId, queryByTestId, queryByText, getByText } = await render(<PuertasScreen />);
+      expect(queryByTestId('tab-peatonal')).toBeNull();
+      expect(queryByTestId('tab-garaje')).toBeNull();
+      expect(queryByText('Desliza para cambiar')).toBeNull();
+      expect(getByText('Portón de Garaje')).toBeTruthy();
+      expect(getByTestId('btn-garaje')).toBeTruthy();
+      expect(queryByTestId('btn-peatonal')).toBeNull();
+    });
+
+    it('un código solo peatonal muestra únicamente la puerta peatonal', async () => {
+      conPin('2S0BP1G0');
+      const { getByTestId, queryByTestId } = await render(<PuertasScreen />);
+      expect(getByTestId('btn-peatonal')).toBeTruthy();
+      expect(queryByTestId('btn-garaje')).toBeNull();
+    });
+
+    it('un acceso temporal enseña los días que quedan, en singular o plural', async () => {
+      conPin('2S0BP1G103');
+      const { getByTestId, rerender } = await render(<PuertasScreen />);
+      expect(getByTestId('acceso-temporal').props.children).toBe('Acceso temporal: 3 días');
+
+      conPin('2S0BP1G101');
+      await rerender(<PuertasScreen />);
+      expect(getByTestId('acceso-temporal').props.children).toBe('Acceso temporal: 1 día');
+    });
+
+    it('un código que no se reconoce no recorta las puertas: decide el ESP32', async () => {
+      conPin('LEGADO');
+      const { getByTestId } = await render(<PuertasScreen />);
+      expect(getByTestId('tab-peatonal')).toBeTruthy();
+      expect(getByTestId('tab-garaje')).toBeTruthy();
+    });
+  });
 });

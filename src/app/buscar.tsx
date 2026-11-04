@@ -5,8 +5,8 @@ import { mostrarModal } from '../components/Modal';
 import { router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import BluetoothService, { DispositivoBT, SIN_NOMBRE, useBluetooth } from '../services/BluetoothService';
-import { DEFAULT_SECURITY_PIN, USUARIO_POR_DEFECTO, esLocker } from '../services/comun';
-import { esPinValido, LogService } from '../services/StorageService';
+import { DEFAULT_SECURITY_PIN, USUARIO_POR_DEFECTO, esLocker, esPinValido } from '../services/comun';
+import { LogService } from '../services/StorageService';
 import {
   DeviceDiscoveryListView,
   ModalVincularDispositivo,

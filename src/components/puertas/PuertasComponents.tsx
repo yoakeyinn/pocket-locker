@@ -75,12 +75,22 @@ export const PuertasHeader: React.FC<PuertasHeaderProps> = ({
 export interface AccessSegmentedControlProps {
   pestanaActiva: Puerta;
   onSelect: (puerta: Puerta) => void;
+  // false cuando el código de acceso solo autoriza una puerta: se muestra su nombre, sin pestañas
+  tieneAmbas?: boolean;
 }
 
 export const AccessSegmentedControl: React.FC<AccessSegmentedControlProps> = ({
   pestanaActiva,
   onSelect,
-}) => (
+  tieneAmbas = true,
+}) =>
+  !tieneAmbas ? (
+    <View style={tw`flex-row items-center justify-center px-4 py-2 bg-silver/60 rounded-full mb-2`}>
+      <Text style={tw`text-xs font-bold text-black`}>
+        {pestanaActiva === 'garaje' ? 'Portón de Garaje' : 'Puerta Peatonal'}
+      </Text>
+    </View>
+  ) : (
   <View style={tw`flex-row items-center justify-center p-1 bg-silver/60 rounded-full mb-2`}>
     <TouchableOpacity
       testID="tab-peatonal"
