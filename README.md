@@ -56,7 +56,7 @@ npm test             # tests (Jest)
 npx tsc --noEmit     # comprobación de tipos
 ```
 
-Builds con EAS: perfiles `development`, `preview` (APK) y `production` en `eas.json`. La versión se cambia solo en `package.json`. Las decisiones de diseño y las reglas del código están en [CLAUDE.md](./CLAUDE.md).
+Builds con EAS: perfiles `development`, `preview` (APK) y `production` en `eas.json`. La versión se cambia solo en `package.json`. Los comandos y la estructura del código están en [CLAUDE.md](./CLAUDE.md).
 
 ## Seguridad
 
@@ -64,3 +64,43 @@ Builds con EAS: perfiles `development`, `preview` (APK) y `production` en `eas.j
 - Un PIN erróneo añade una espera creciente a los siguientes intentos, pero no bloquea el acceso.
 - El firmware admite autenticación por desafío (HMAC-SHA256 con nonce de 15 s), pero **la app envía hoy el PIN directamente**. No lo uses como única barrera de seguridad.
 - El PIN de la app se guarda en el almacén seguro del teléfono. El PIN por defecto (2415) está en el código del firmware y de la app (`DEFAULT_SECURITY_PIN` en `src/services/comun.ts`); cámbialo en ambos antes de un uso real. La app no tiene todavía una pantalla para cambiarlo.
+
+## Pendiente
+
+Estado a 2026-11-05, rama `dev`, último commit `b9f86e6`. No se ha hecho `push` de nada.
+
+### Funcionalidad por hacer
+
+1. **Caducidad real de los códigos de días (`2S0BP…dd`).** Hoy el teléfono solo muestra "Acceso temporal: n día(s)" y no cuenta el tiempo. El ESP32 solo aplica la caducidad a usuarios registrados en su tabla por MAC (`PLK:REG:<nombre>:<código>`), y la app envía únicamente `PLK:<PIN>:<CMD>` y `PLK:LOG:…`, así que con la forma directa **el código nunca caduca**. Hay que:
+   - Enviar `PLK:REG:<nombre>:<código>` tras vincular (respuestas `OK:REGISTRADO:USER:<p>:<g>:<días>`, `ERR:PIN_INVALIDO`, `ERR:DB_LLENA`).
+   - Enviar `PLK:SYNC:<epoch>` al conectar para sincronizar el reloj del ESP32 y leer `INFO:<ACTIVO|BLOQUEADO>:<días restantes>:<p>:<g>`.
+   - Mostrar los días restantes reales y tratar `ERR:BLOQUEADO` como "acceso caducado".
+2. **Preferencia "Accesibilidad".** Existe el interruptor en las preferencias (login y ajustes) y se guarda (`accesibilidad`, `usePreferencias.accesibilidad`), pero **no hace nada**. Falta que Alba defina qué debe cambiar.
+3. **Administrador.** El firmware admite `PLK:ADMIN:LIST` y bloquear, desbloquear y actualizar usuarios, y la app no los usa. No hay pantalla de gestión de usuarios ni de cambio del PIN de administrador.
+4. **Textos en español fijo en el código** (sin pasar por `es.json`/`en.json`): casi todo `puertas`, `ajustes` y algunos errores de `BluetoothService`.
+5. **Re-bloqueo al volver a la app.** El bloqueo con huella/PIN solo se pide en cada arranque en frío; no se vuelve a pedir al volver desde segundo plano.
+6. **"Desvincular dispositivo"** (`clearDevice`) también borra el nombre de usuario guardado. Se propuso separarlos y no se ha decidido.
+
+### Decisiones abiertas
+
+- **PIN directo con huella registrada.** El diálogo de verificación es del sistema Android: su texto de ayuda ("Escanea tu huella digital") y su botón "Usar PIN" no se pueden cambiar ni saltar con `expo-local-authentication`. Saltar directamente al PIN exigiría parchear el código Android de la librería con `patch-package` (añadiría una dependencia de desarrollo y un `postinstall`). No está aprobado.
+- **Momento de detección del PLBT en el radar (demo).** Ahora aparece a los 5 s (segundo de los diez dispositivos simulados); antes era a los 10 s. Confirmar cuál se prefiere.
+- **Comentarios de `esp32/main.cpp`.** Los comentarios se borraron de la app, no del firmware.
+
+### Por probar en un móvil real (nada de esto se ha visto en un dispositivo; solo hay tests)
+
+- Tema oscuro por defecto con el splash en claro: posible parpadeo al pasar del splash a la siguiente pantalla.
+- Bloqueo desde el splash: diálogo del sistema, reintento al cancelar, háptico al acertar, y que "Usar PIN" funcione.
+- Vigilancia del Bluetooth en dispositivos cercanos (cada 1,5 s): apagarlo y encenderlo con la búsqueda en marcha, y los botones "Activar Bluetooth" y "Abrir ajustes del teléfono".
+- Animaciones lentas del login, el radar y la cabecera de la lista; entrada rápida de las filas.
+- Sombras y el aspecto de los botones de icono en Android real.
+- Cierre completo de la app (`react-native-exit-app`): exige un build propio (`npx expo prebuild` y `npx expo run:android`) y no se ha comprobado su compatibilidad con la versión actual de Gradle. En iOS no se puede cerrar una app por código.
+- `expo-local-authentication` y `expo-haptics` también necesitan ese build propio; en Expo Go solo funciona parte.
+
+### Para retomar en una conversación nueva
+
+- Las **reglas de trabajo** están en `.claude/rules/reglas.md` y la **teoría de la app** (estilo visual, flujos, protocolo, códigos de acceso, textos, modo demo, errores) en la skill `.claude/skills/documentacion/SKILL.md`. La carpeta `.claude/` está excluida de git en local (`.git/info/exclude`), no existe en GitHub y hay que copiarla si se clona en otro equipo.
+- `.gitignore` no se toca ni se sube nunca.
+- Git no tiene nombre ni correo configurados en este equipo; los commits usan `-c user.name` y `-c user.email` puntuales con la identidad de los commits anteriores.
+- Para ver la primera ejecución (splash de 3 s, bienvenida, preferencias): *Ajustes → Borrar datos de la aplicación*. Para recorrer la app sin ESP32, el nombre `demo`.
+- Antes de dar algo por hecho: `npm test` (246 tests) y `npx tsc --noEmit --noUnusedLocals`.
