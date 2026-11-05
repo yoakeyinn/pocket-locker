@@ -5,25 +5,22 @@ import {
   AppState,
   PanResponder,
   ScrollView,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { MaterialIcons } from '@expo/vector-icons';
 import BluetoothService, { useBluetooth } from '../services/BluetoothService';
-import {
-  PuertasHeader,
-  DoorActionButton,
-  AccessSegmentedControl,
-} from '../components/puertas/PuertasComponents';
+import { AccessSegmentedControl } from '../components/puertas/AccessSegmentedControl';
+import { DoorActionButton } from '../components/puertas/DoorActionButton';
+import { PuertasHeader } from '../components/puertas/PuertasHeader';
 import { LogService } from '../services/StorageService';
 import { mostrarModal } from '../components/Modal';
 import { SinDispositivoCard } from '../components/SinDispositivoCard';
 import { Text } from '../styles/tipografia/Tipografia';
-import tw, { Colors, cicloPulso, tipografia } from '../styles/styles';
-import { Puerta, USUARIO_POR_DEFECTO, parsearPin } from '../services/comun';
+import tw, { cicloPulso, tipografia, useTema } from '../styles/styles';
+import { Puerta, parsearPin } from '../services/comun';
+import { Aparece } from '../components/Aparece';
 
 const PUERTAS: Puerta[] = ['peatonal', 'garaje'];
 
@@ -95,11 +92,11 @@ function usePuertasAnimations(status: string, ejecutando: Puerta | null) {
 }
 
 export default function PuertasScreen() {
+  useTema();
   const {
     status,
     deviceName,
     deviceMac,
-    userName,
     devicePin,
     conectar,
     desconectar,
@@ -111,7 +108,6 @@ export default function PuertasScreen() {
     pedirActivar,
   } = useBluetooth();
 
-  // Puertas que autoriza el código guardado; si no se reconoce, se dejan ambas y decide el ESP32.
   const acceso = parsearPin(devicePin);
   const permitidas = acceso.esValido ? PUERTAS.filter((puerta) => acceso[puerta]) : PUERTAS;
   const tieneAmbas = permitidas.length === PUERTAS.length;
@@ -119,13 +115,11 @@ export default function PuertasScreen() {
   const [pestanaElegida, setPestanaElegida] = useState<Puerta>(ultimaPuerta || 'peatonal');
   const pestanaActiva = permitidas.includes(pestanaElegida) ? pestanaElegida : permitidas[0];
   const [ejecutando, setEjecutando] = useState<Puerta | null>(null);
-  const [mensajeExito, setMensajeExito] = useState<string | null>(null);
   const [scrollHabilitado, setScrollHabilitado] = useState(true);
 
   const ejecutandoRef = useRef(false);
   const isTransitioningRef = useRef(false);
   const autoDisconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mensajeExitoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aperturaAnimTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const terminarEjecucion = useCallback(() => {
@@ -139,7 +133,6 @@ export default function PuertasScreen() {
 
   const limpiarTimers = useCallback(() => {
     if (autoDisconnectTimerRef.current) clearTimeout(autoDisconnectTimerRef.current);
-    if (mensajeExitoTimerRef.current) clearTimeout(mensajeExitoTimerRef.current);
     if (aperturaAnimTimerRef.current) clearTimeout(aperturaAnimTimerRef.current);
   }, []);
 
@@ -203,11 +196,8 @@ export default function PuertasScreen() {
 
   const panResponder = useMemo(() => {
     return PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (_, g) =>
         tieneAmbas && !ejecutandoRef.current && Math.abs(g.dx) >= 20 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
-      onMoveShouldSetPanResponderCapture: () => false,
       onPanResponderGrant: () => {
         panX.stopAnimation();
         isTransitioningRef.current = false;
@@ -296,10 +286,7 @@ export default function PuertasScreen() {
                 ]
               );
             } else {
-              mostrarModal(
-                'Error de conexión',
-                `No se pudo conectar con el ${t('pl_app_titulo')}.\n\n${rawMsg || 'Verifica que esté encendido y en rango.'}`
-              );
+              mostrarModal(t('pl_error_conexion_titulo'), t('pl_error_conexion_mensaje', { app: t('pl_app_titulo') }));
             }
             return;
           }
@@ -310,13 +297,6 @@ export default function PuertasScreen() {
           iniciarBloqueoMargen(5);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
           LogService.info(`[Puertas] ${tipo} abierta correctamente`);
-          setMensajeExito(
-            tipo === 'garaje' ? '¡Portón de garaje abriéndose!' : '¡Puerta peatonal abriéndose!'
-          );
-
-          if (mensajeExitoTimerRef.current) clearTimeout(mensajeExitoTimerRef.current);
-          mensajeExitoTimerRef.current = setTimeout(() => setMensajeExito(null), 4500);
-
           if (aperturaAnimTimerRef.current) clearTimeout(aperturaAnimTimerRef.current);
           aperturaAnimTimerRef.current = setTimeout(() => {
             terminarEjecucion();
@@ -331,13 +311,13 @@ export default function PuertasScreen() {
           LogService.error(`[Puertas] No se pudo enviar el comando de ${tipo}`, err);
           terminarEjecucion();
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
-          mostrarModal('No se pudo abrir', err?.message || 'No se pudo enviar el comando.');
+          mostrarModal(t('pl_error_apertura_titulo'), t('pl_error_apertura_mensaje', { app: t('pl_app_titulo') }));
           desconectarEnSilencio();
         }
       } catch (e: any) {
         LogService.error(`[Puertas] Error inesperado al abrir ${tipo}`, e);
         terminarEjecucion();
-        mostrarModal('Error', e?.message || 'Ocurrió un error inesperado');
+        mostrarModal(t('pl_aviso'), t('pl_error_inesperado'));
       }
     },
     [ejecutando, tiempoRestanteBloqueo, status, conectar, enviarComando, iniciarBloqueoMargen, pedirActivar, desconectarEnSilencio, terminarEjecucion]
@@ -365,16 +345,19 @@ export default function PuertasScreen() {
 
   const botonDeshabilitado = ejecutando !== null || tiempoRestanteBloqueo > 0;
 
+  const cabecera = (
+    <PuertasHeader
+      status={status}
+      deviceName={deviceName}
+      blinkValue={blinkValue}
+      onPressAjustes={() => router.push('/ajustes')}
+    />
+  );
+
   if (!deviceMac) {
     return (
       <SafeAreaView style={tw`flex-1 bg-beige`} edges={['top', 'bottom']}>
-        <PuertasHeader
-          userName={userName || USUARIO_POR_DEFECTO}
-          status={status}
-          deviceName={deviceName}
-          blinkValue={blinkValue}
-          onPressAjustes={() => router.push('/ajustes')}
-        />
+        {cabecera}
         <View style={tw`flex-1 justify-center px-5`}>
           <SinDispositivoCard onBuscar={() => router.replace('/buscar')} />
         </View>
@@ -384,24 +367,51 @@ export default function PuertasScreen() {
 
   return (
     <SafeAreaView style={tw`flex-1 bg-beige`} edges={['top', 'bottom']}>
-      <PuertasHeader
-        userName={userName || USUARIO_POR_DEFECTO}
-        status={status}
-        deviceName={deviceName}
-        blinkValue={blinkValue}
-        onPressAjustes={() => router.push('/ajustes')}
-      />
+      {cabecera}
 
       <ScrollView
         scrollEnabled={scrollHabilitado}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={tw`p-5 pb-10 flex-grow justify-between`}
+        contentContainerStyle={tw`px-5 pt-2 pb-6 flex-grow justify-between`}
       >
-        <View style={tw`items-center`}>
-          <Text style={tw`font-display text-xl font-bold text-black tracking-tight mb-4`}>
-            Panel de Control
-          </Text>
+        <Aparece retraso={240} style={tw`w-full my-auto`}>
+          <View {...panResponder.panHandlers}>
+            <Animated.View
+              style={[
+                tw`w-full items-center justify-center`,
+                {
+                  opacity: cardEntranceAnim,
+                  transform: [
+                    { translateX: panX },
+                    {
+                      scale: cardEntranceAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0.95, 1],
+                      }),
+                    },
+                  ],
+                },
+              ]}
+            >
+              <DoorActionButton
+                tipo={pestanaActiva}
+                ejecutando={ejecutando}
+                tiempoRestanteBloqueo={tiempoRestanteBloqueo}
+                botonDeshabilitado={botonDeshabilitado}
+                onPress={() => handleAbrir(pestanaActiva, pestanaActiva === 'garaje' ? 'G' : 'P')}
+                onPressIn={onPressInButton}
+                onPressOut={onPressOutButton}
+                buttonPressScale={buttonPressScale}
+                radarPulse1={radarPulse1}
+                radarPulse2={radarPulse2}
+                radarOpacity1={radarOpacity1}
+                radarOpacity2={radarOpacity2}
+              />
+            </Animated.View>
+          </View>
+        </Aparece>
 
+        <Aparece retraso={360} style={tw`items-center pb-2`}>
           <AccessSegmentedControl
             pestanaActiva={pestanaActiva}
             tieneAmbas={tieneAmbas}
@@ -411,86 +421,15 @@ export default function PuertasScreen() {
           />
 
           {acceso.dias !== null && (
-            <Text testID="acceso-temporal" style={[tipografia.anotacion, tw`text-xs mt-1`]}>
+            <Text testID="acceso-temporal" style={[tipografia.anotacion, tw`text-xs mt-3`]}>
               {t(acceso.dias === 1 ? 'pl_acceso_temporal_dia' : 'pl_acceso_temporal_dias', { dias: String(acceso.dias) })}
             </Text>
           )}
-        </View>
 
-        <View style={tw`h-12 items-center justify-center my-1 w-full`}>
-          {mensajeExito && (
-            <View
-              testID="banner-exito-apertura"
-              style={tw`flex-row items-center justify-center bg-silver border border-gray rounded-2xl px-4 py-2 shadow-sm`}
-            >
-              <MaterialIcons name="check-circle" size={20} color={Colors.black} />
-              <Text style={tw`text-black font-bold text-xs ml-2`}>
-                {mensajeExito}
-              </Text>
-            </View>
+          {tieneAmbas && (
+            <Text style={[tipografia.anotacion, tw`text-xs mt-3`]}>Desliza para cambiar</Text>
           )}
-        </View>
-
-        <View style={tw`w-full my-auto`} {...panResponder.panHandlers}>
-          <Animated.View
-            style={[
-              tw`w-full items-center justify-center`,
-              {
-                opacity: cardEntranceAnim,
-                transform: [
-                  { translateX: panX },
-                  {
-                    scale: cardEntranceAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.95, 1],
-                    }),
-                  },
-                ],
-              },
-            ]}
-          >
-            <DoorActionButton
-              tipo={pestanaActiva}
-              ejecutando={ejecutando}
-              tiempoRestanteBloqueo={tiempoRestanteBloqueo}
-              botonDeshabilitado={botonDeshabilitado}
-              onPress={() => handleAbrir(pestanaActiva, pestanaActiva === 'garaje' ? 'G' : 'P')}
-              onPressIn={onPressInButton}
-              onPressOut={onPressOutButton}
-              buttonPressScale={buttonPressScale}
-              radarPulse1={radarPulse1}
-              radarPulse2={radarPulse2}
-              radarOpacity1={radarOpacity1}
-              radarOpacity2={radarOpacity2}
-            />
-          </Animated.View>
-        </View>
-
-        {tieneAmbas && (
-          <View style={tw`items-center pb-2`}>
-            <View style={tw`flex-row items-center justify-center gap-2`}>
-              <TouchableOpacity
-                onPress={() => transicionarHacia('derecha', 'peatonal')}
-                activeOpacity={0.7}
-                style={[
-                  tw`rounded-full`,
-                  pestanaActiva === 'peatonal' ? tw`w-6 h-1.5 bg-black` : tw`w-1.5 h-1.5 bg-silver`,
-                ]}
-              />
-              <TouchableOpacity
-                onPress={() => transicionarHacia('izquierda', 'garaje')}
-                activeOpacity={0.7}
-                style={[
-                  tw`rounded-full`,
-                  pestanaActiva === 'garaje' ? tw`w-6 h-1.5 bg-black` : tw`w-1.5 h-1.5 bg-silver`,
-                ]}
-              />
-            </View>
-            <Text style={tw`text-xs text-gray mt-2.5 tracking-wider`}>
-              Desliza para cambiar
-            </Text>
-          </View>
-        )}
+        </Aparece>
       </ScrollView>
     </SafeAreaView>
   );

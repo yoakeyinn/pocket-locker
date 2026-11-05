@@ -2,17 +2,21 @@ import { LogBox, Platform } from 'react-native';
 import { mostrarModalError } from '../components/Modal';
 import { t } from '../styles/i18n';
 import { usePocketStore } from './BluetoothService';
+import { compactarPila } from './pila';
 import { LogService } from './StorageService';
 
 const VERSION: string = require('../../package.json').version;
-const LINEAS_DE_REGISTRO = 120;
+const LINEAS_DE_REGISTRO = 40;
+const FRAMES_ERROR = 12;
+const FRAMES_REGISTRO = 3;
 
 function describirError(error: unknown): string {
   if (error instanceof Error) {
     const causa = (error as { cause?: unknown }).cause;
+    const pila = compactarPila(error.stack, FRAMES_ERROR);
     return [
       `${error.name}: ${error.message}`,
-      error.stack ? `Pila:\n${error.stack}` : 'Pila: (no disponible)',
+      pila ? `Pila:\n${pila}` : 'Pila: (no disponible)',
       causa ? `Causa: ${describirError(causa)}` : '',
     ]
       .filter(Boolean)
@@ -25,13 +29,33 @@ function describirError(error: unknown): string {
   }
 }
 
+function resumirDetalle(extra?: string): string {
+  if (!extra) return '';
+  try {
+    const dato = JSON.parse(extra);
+    if (dato && typeof dato === 'object' && 'message' in dato) {
+      const pila = compactarPila(dato.stack, FRAMES_REGISTRO);
+      return `  ${dato.name ?? 'Error'}: ${dato.message}${pila ? '\n' + pila.replace(/^/gm, '    ') : ''}`;
+    }
+  } catch {
+  }
+  return `  ${extra.replace(/\s+/g, ' ').slice(0, 200)}`;
+}
+
+function lineasDeRegistro(): string[] {
+  const lineas: { texto: string; veces: number }[] = [];
+  for (const l of LogService.getLogs().slice(0, LINEAS_DE_REGISTRO).reverse()) {
+    const texto = `${l.timestamp} [${l.level.toUpperCase()}] ${l.message}${l.extra ? `\n${resumirDetalle(l.extra)}` : ''}`;
+    const sinHora = texto.slice(texto.indexOf('['));
+    const anterior = lineas[lineas.length - 1];
+    if (anterior && anterior.texto.slice(anterior.texto.indexOf('[')) === sinHora) anterior.veces++;
+    else lineas.push({ texto, veces: 1 });
+  }
+  return lineas.map(({ texto, veces }) => (veces > 1 ? `${texto.split('\n')[0]} (×${veces})${texto.includes('\n') ? '\n' + texto.split('\n').slice(1).join('\n') : ''}` : texto));
+}
+
 export function construirInforme(error: unknown, contexto: string): string {
   const { status, deviceName, deviceMac, deviceType, cargando } = usePocketStore.getState();
-  const registro = LogService.getLogs()
-    .slice(0, LINEAS_DE_REGISTRO)
-    .reverse()
-    .map((l) => `${l.timestamp} [${l.level.toUpperCase()}] ${l.message}${l.extra ? `\n${l.extra}` : ''}`);
-
   return [
     `${t('pl_app_titulo')} v${VERSION} - informe de error`,
     `Fecha: ${new Date().toISOString()}`,
@@ -43,7 +67,7 @@ export function construirInforme(error: unknown, contexto: string): string {
     describirError(error),
     '',
     `REGISTRO (ultimas ${LINEAS_DE_REGISTRO} entradas, de antigua a reciente)`,
-    ...registro,
+    ...lineasDeRegistro(),
   ].join('\n');
 }
 

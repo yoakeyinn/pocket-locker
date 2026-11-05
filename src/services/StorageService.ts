@@ -1,4 +1,6 @@
-import { t } from '../styles/i18n';
+import { esIdioma, Idioma, t } from '../styles/i18n';
+import { compactarPila } from './pila';
+import type { Tema } from '../styles/styles';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -35,7 +37,7 @@ class LogServiceClass {
       const seen = new WeakSet();
       return JSON.stringify(extra, (_clave, value) => {
         if (value instanceof Error) {
-          return { name: value.name, message: value.message, stack: value.stack };
+          return { name: value.name, message: value.message, stack: compactarPila(value.stack, 6) };
         }
         if (typeof value === 'object' && value !== null) {
           if (seen.has(value)) return '[Circular]';
@@ -270,6 +272,10 @@ const KEYS = {
   DEVICE_PIN: 'devicePin_secure',
   ULTIMA_PUERTA: 'ultima_puerta_activa',
   USER_NAME: 'user_name_registrado',
+  IDIOMA: 'idioma',
+  TEMA: 'tema',
+  BIOMETRIA: 'biometria',
+  ACCESIBILIDAD: 'accesibilidad',
 };
 
 export interface DispositivoGuardado {
@@ -324,6 +330,40 @@ class StorageServiceClass {
     const limpio = userName.trim();
     await this.setItem(KEYS.USER_NAME, limpio);
     LogService.info(`Nombre de usuario guardado: ${limpio}`);
+  }
+
+  async getIdioma(): Promise<Idioma | null> {
+    const idioma = await this.getItem(KEYS.IDIOMA);
+    return esIdioma(idioma) ? idioma : null;
+  }
+
+  async saveIdioma(idioma: Idioma): Promise<void> {
+    await this.setItem(KEYS.IDIOMA, idioma);
+  }
+
+  async getTema(): Promise<Tema | null> {
+    const tema = await this.getItem(KEYS.TEMA);
+    return tema === 'claro' || tema === 'oscuro' ? tema : null;
+  }
+
+  async saveTema(tema: Tema): Promise<void> {
+    await this.setItem(KEYS.TEMA, tema);
+  }
+
+  async getBiometria(): Promise<boolean> {
+    return (await this.getItem(KEYS.BIOMETRIA)) === 'si';
+  }
+
+  async saveBiometria(activa: boolean): Promise<void> {
+    await this.setItem(KEYS.BIOMETRIA, activa ? 'si' : 'no');
+  }
+
+  async getAccesibilidad(): Promise<boolean> {
+    return (await this.getItem(KEYS.ACCESIBILIDAD)) === 'si';
+  }
+
+  async saveAccesibilidad(activa: boolean): Promise<void> {
+    await this.setItem(KEYS.ACCESIBILIDAD, activa ? 'si' : 'no');
   }
 
   async getUltimaPuerta(): Promise<Puerta> {
@@ -404,6 +444,21 @@ class StorageServiceClass {
       LogService.error('Error eliminando dispositivo de storage', e);
       throw e;
     }
+  }
+
+  async borrarTodo(): Promise<void> {
+    try {
+      await AsyncStorage.clear();
+    } catch (e) {
+      LogService.error('Error borrando los datos de la aplicación', e);
+      throw e;
+    }
+    try {
+      await SecureStore.deleteItemAsync(KEYS.DEVICE_PIN);
+    } catch (e) {
+      LogService.warn('No se pudo borrar el PIN del almacén seguro', e);
+    }
+    await LogService.clearLogs();
   }
 
   async obtenerDispositivo(): Promise<DispositivoGuardado> {

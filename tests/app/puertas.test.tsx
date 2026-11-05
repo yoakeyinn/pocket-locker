@@ -28,6 +28,7 @@ jest.mock('react-native', () => {
       })),
       timing: jest.fn().mockImplementation(() => ({
         start: jest.fn((cb) => cb && cb({ finished: true })),
+        stop: jest.fn(),
       })),
       spring: jest.fn().mockImplementation(() => ({
         start: jest.fn((cb) => cb && cb({ finished: true })),
@@ -55,6 +56,7 @@ jest.mock('react-native', () => {
       quad: jest.fn(),
       cubic: jest.fn(),
       back: jest.fn(() => jest.fn()),
+      bezier: jest.fn(() => jest.fn()),
       linear: jest.fn(),
       in: jest.fn((fn) => fn),
       inOut: jest.fn((fn) => fn),
@@ -69,6 +71,7 @@ jest.mock('react-native', () => {
     Dimensions: {
       get: jest.fn().mockReturnValue({ width: 375, height: 812 }),
     },
+    useWindowDimensions: () => ({ width: 375, height: 812 }),
     PanResponder: {
       create: jest.fn().mockImplementation((config) => ({
         panHandlers: {},
@@ -171,12 +174,12 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
   });
 
   it('debería renderizar correctamente el título y estado conectado', async () => {
-    const { getByText, getAllByText } = await render(<PuertasScreen />);
+    const { getByText, getAllByText, queryByText } = await render(<PuertasScreen />);
 
-    expect(getByText('Panel de Control')).toBeTruthy();
+    expect(queryByText('Panel de Control')).toBeNull();
     expect(getByText('Locker Test')).toBeTruthy();
     expect(getAllByText('Puerta Peatonal').length).toBeGreaterThanOrEqual(1);
-    expect(getByText('Portón de Garaje')).toBeTruthy();
+    expect(getAllByText('Portón de Garaje').length).toBeGreaterThanOrEqual(1);
   });
 
   it('debería enviar el comando P al presionar el botón de puerta peatonal', async () => {
@@ -200,7 +203,7 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
     expect(queryByTestId('btn-garaje')).toBeNull();
 
     await act(async () => {
-      fireEvent.press(getByTestId('tab-garaje'));
+      fireEvent.press(getByTestId('puerta-garaje'));
     });
 
     expect(queryByTestId('btn-peatonal')).toBeNull();
@@ -211,7 +214,7 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
     const { getByTestId } = await render(<PuertasScreen />);
 
     await act(async () => {
-      fireEvent.press(getByTestId('tab-garaje'));
+      fireEvent.press(getByTestId('puerta-garaje'));
     });
 
     const button = getByTestId('btn-garaje');
@@ -264,14 +267,14 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
       guardarUltimaPuerta: mockGuardarUltimaPuerta,
     });
 
-    const { getByTestId, getByText } = await render(<PuertasScreen />);
+    const { getByTestId, queryByText } = await render(<PuertasScreen />);
 
     const btnPeatonal = getByTestId('btn-peatonal');
     expect(btnPeatonal.props.onPress).toBeUndefined();
-    expect(getByText('Espera 5 s...')).toBeTruthy();
+    expect(queryByText('Espera 5 s...')).toBeNull();
 
     await act(async () => {
-      fireEvent.press(getByTestId('tab-garaje'));
+      fireEvent.press(getByTestId('puerta-garaje'));
     });
 
     const btnGaraje = getByTestId('btn-garaje');
@@ -352,9 +355,9 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
     expect(mockGuardarUltimaPuerta).toHaveBeenCalledWith('peatonal');
   });
 
-  it('debería mostrar banner de confirmación en pantalla y no navegar a resultado al abrir', async () => {
+  it('al abrir no sale ningún aviso ni se navega a otra pantalla', async () => {
     const { router } = require('expo-router');
-    const { getByTestId, getByText } = await render(<PuertasScreen />);
+    const { getByTestId, queryByTestId, queryByText } = await render(<PuertasScreen />);
 
     const button = getByTestId('btn-peatonal');
     await act(async () => {
@@ -363,8 +366,8 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
 
     expect(mockEnviarComando).toHaveBeenCalledWith('P');
     expect(mockIniciarBloqueoMargen).toHaveBeenCalledWith(5);
-    expect(getByTestId('banner-exito-apertura')).toBeTruthy();
-    expect(getByText('¡Puerta peatonal abriéndose!')).toBeTruthy();
+    expect(queryByTestId('banner-exito-apertura')).toBeNull();
+    expect(queryByText(/abriéndose/)).toBeNull();
     expect(router.push).not.toHaveBeenCalledWith(expect.stringContaining('resultado'));
   });
 
@@ -390,10 +393,13 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
     expect(router.push).toHaveBeenCalledWith('/ajustes');
   });
 
-  it('saluda al usuario en la cabecera', async () => {
+  it('la cabecera no saluda: solo la etiqueta del dispositivo y el botón de ajustes', async () => {
     (useBluetooth as jest.Mock).mockReturnValue({ ...(useBluetooth as jest.Mock)(), userName: 'Ana' });
-    const { getByText } = await render(<PuertasScreen />);
-    expect(getByText('Hola, Ana')).toBeTruthy();
+    const { queryByText, getByText, getByTestId } = await render(<PuertasScreen />);
+    expect(queryByText(/Hola/)).toBeNull();
+    expect(queryByText('Ana')).toBeNull();
+    expect(getByText('Locker Test')).toBeTruthy();
+    expect(getByTestId('btn-header-ajustes')).toBeTruthy();
   });
 
   it('sin dispositivo vinculado muestra el estado vacío y no los controles', async () => {
@@ -421,11 +427,9 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
     expect(router.replace).toHaveBeenCalledWith('/buscar');
   });
 
-  it('no debería contener la palabra "Abrir" dentro del botón, manteniendo "Pulsar para abrir" debajo', async () => {
-    const { getByText, queryByText } = await render(<PuertasScreen />);
-
-    expect(getByText('Pulsar para abrir')).toBeTruthy();
-    expect(queryByText('Abrir')).toBeNull();
+  it('no hay textos de estado bajo el botón (ni «Pulsar para abrir», ni «Abriendo», ni «Espera»)', async () => {
+    const { queryByText } = await render(<PuertasScreen />);
+    expect(queryByText(/Pulsar para abrir|Abriendo|Espera/)).toBeNull();
   });
 
   describe('código de acceso (permisos por puerta)', () => {
@@ -435,8 +439,8 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
     it('el administrador (2415) ve las dos pestañas y los puntos para deslizar', async () => {
       conPin('2415');
       const { getByTestId, getByText, queryByTestId } = await render(<PuertasScreen />);
-      expect(getByTestId('tab-peatonal')).toBeTruthy();
-      expect(getByTestId('tab-garaje')).toBeTruthy();
+      expect(getByTestId('puerta-peatonal')).toBeTruthy();
+      expect(getByTestId('puerta-garaje')).toBeTruthy();
       expect(getByText('Desliza para cambiar')).toBeTruthy();
       expect(queryByTestId('acceso-temporal')).toBeNull();
     });
@@ -444,8 +448,8 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
     it('un código solo de garaje muestra únicamente esa puerta, aunque la última fuera la peatonal', async () => {
       conPin('2S0BP0G1');
       const { getByTestId, queryByTestId, queryByText, getByText } = await render(<PuertasScreen />);
-      expect(queryByTestId('tab-peatonal')).toBeNull();
-      expect(queryByTestId('tab-garaje')).toBeNull();
+      expect(queryByTestId('puerta-peatonal')).toBeNull();
+      expect(queryByTestId('puerta-garaje')).toBeNull();
       expect(queryByText('Desliza para cambiar')).toBeNull();
       expect(getByText('Portón de Garaje')).toBeTruthy();
       expect(getByTestId('btn-garaje')).toBeTruthy();
@@ -472,8 +476,8 @@ describe('Unified PuertasScreen (Minimalist Infinite Scroll)', () => {
     it('un código que no se reconoce no recorta las puertas: decide el ESP32', async () => {
       conPin('LEGADO');
       const { getByTestId } = await render(<PuertasScreen />);
-      expect(getByTestId('tab-peatonal')).toBeTruthy();
-      expect(getByTestId('tab-garaje')).toBeTruthy();
+      expect(getByTestId('puerta-peatonal')).toBeTruthy();
+      expect(getByTestId('puerta-garaje')).toBeTruthy();
     });
   });
 });

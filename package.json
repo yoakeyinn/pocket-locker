@@ -6,7 +6,6 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "simular": "node tests/simulacion/iniciar.js",
     "test": "jest"
   },
   "dependencies": {
@@ -21,6 +20,7 @@
     "expo-haptics": "~58.0.7",
     "expo-intent-launcher": "~58.0.3",
     "expo-linking": "~58.0.16",
+    "expo-local-authentication": "~58.0.2",
     "expo-router": "~58.0.30",
     "expo-secure-store": "~58.0.2",
     "expo-status-bar": "~58.0.4",
@@ -30,6 +30,7 @@
     "react-native": "0.88.1",
     "react-native-ble-plx": "^3.5.1",
     "react-native-bluetooth-classic": "^1.73.0-rc.12",
+    "react-native-exit-app": "^2.0.0",
     "react-native-safe-area-context": "~5.11.1",
     "react-native-screens": "~4.30.1",
     "twrnc": "^4.16.0",

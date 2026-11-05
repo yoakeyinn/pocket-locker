@@ -4,28 +4,30 @@ import { Stack } from 'expo-router';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { Colors } from '../styles/styles';
+import { Colors, forzarTemaClaro, useTema } from '../styles/styles';
 import { BluetoothProvider } from '../services/BluetoothService';
 import { LimiteDeErrores } from '../components/LimiteDeErrores';
 import { ModalHost } from '../components/Modal';
 import { instalarCapturaDeErrores } from '../services/ErrorService';
-import { modoSimulacion } from '../services/comun';
+import { cargarPreferencias } from '../services/preferencias';
 import { LogService } from '../services/StorageService';
 import { activarFuentes } from '../styles/tipografia/fonts';
 import { ARCHIVOS_FUENTES } from '../styles/tipografia/fuentesArchivos';
 
 instalarCapturaDeErrores();
-
-if (modoSimulacion()) {
-  require('../../tests/simulacion/bluetooth').instalarSimulacion(modoSimulacion());
-}
+forzarTemaClaro(true);
 
 function Aplicacion() {
+  const tema = useTema();
   const [fuentesCargadas, errorFuentes] = useFonts(ARCHIVOS_FUENTES);
 
   useEffect(() => {
     if (errorFuentes) LogService.error('[Fuentes] No se pudieron cargar las fuentes: se usa la del sistema', errorFuentes);
   }, [errorFuentes]);
+
+  useEffect(() => {
+    cargarPreferencias();
+  }, []);
 
   activarFuentes(fuentesCargadas && !errorFuentes);
   if (!fuentesCargadas && !errorFuentes) {
@@ -34,7 +36,7 @@ function Aplicacion() {
 
   return (
     <BluetoothProvider>
-      <StatusBar style="dark" />
+      <StatusBar style={tema === 'oscuro' ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
           headerShown: false,
@@ -43,7 +45,7 @@ function Aplicacion() {
         }}
       >
         <Stack.Screen name="index" />
-        <Stack.Screen name="nombre" />
+        <Stack.Screen name="login" />
         <Stack.Screen name="buscar" />
         <Stack.Screen name="puertas" />
         <Stack.Screen name="ajustes" />

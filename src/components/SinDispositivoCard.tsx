@@ -7,7 +7,6 @@ import { t } from '../styles/i18n';
 import { Text } from '../styles/tipografia/Tipografia';
 import tw, { Colors, tipografia } from '../styles/styles';
 
-// Estado vacío de `puertas` y `ajustes` cuando no hay ningún locker vinculado.
 export const SinDispositivoCard: React.FC<{ onBuscar: () => void }> = ({ onBuscar }) => {
   const app = t('pl_app_titulo');
   return (

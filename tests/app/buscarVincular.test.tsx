@@ -44,7 +44,6 @@ jest.mock('react-native-safe-area-context', () => {
 const SENUELO = { name: 'JBL Flip 5', address: '11:22', type: 'classic' };
 const LOCKER = { name: 'PLBT', address: 'AA:BB', type: 'classic' };
 
-// Lleva la pantalla a la lista manual con ambos dispositivos y abre el modal del que se pulse.
 async function abrirModalDe(nombre: string) {
   mockBluetooth.listarDispositivos
     .mockImplementationOnce(() => new Promise(() => {}))

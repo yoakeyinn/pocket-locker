@@ -4,6 +4,7 @@ import { Platform, PermissionsAndroid, NativeModules, Linking, AppState, AppStat
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
 import { BleManager, Device } from 'react-native-ble-plx';
 import { create } from 'zustand';
+import { useArranque } from './arranque';
 import StorageService, { LogService } from './StorageService';
 import { DEFAULT_SECURITY_PIN, Puerta, TipoDispositivo, USUARIO_POR_DEFECTO } from './comun';
 
@@ -196,12 +197,17 @@ class BluetoothServiceClass {
     }
   }
 
+  private bleNoDisponibleAvisado = false;
+
   private getBleManager(): BleManager | null {
     if (!this.bleManager) {
       try {
         this.bleManager = new BleManager();
       } catch (e) {
-        LogService.warn('[BLE] BleManager no disponible', e);
+        if (!this.bleNoDisponibleAvisado) {
+          this.bleNoDisponibleAvisado = true;
+          LogService.warn(`[BLE] BleManager no disponible: ${e instanceof Error ? e.message : String(e)}`);
+        }
         this.bleManager = null;
       }
     }
@@ -1030,7 +1036,7 @@ export function BluetoothProvider({ children }: { children: React.ReactNode }) {
       if (nextAppState === 'active') {
         appStateDebounceTimer.current = setTimeout(async () => {
           try {
-            if (!(await BluetoothService.estaEncendido())) {
+            if (!useArranque.getState().enCurso && !(await BluetoothService.estaEncendido())) {
               LogService.warn('[App] Bluetooth apagado al volver a la aplicación');
               await BluetoothService.pedirActivar(false).catch((e) => LogService.warn('[App] pedirActivar(false) falló', e));
             }

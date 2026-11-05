@@ -1,8 +1,9 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
-import { Modal, ModalHost, mostrarModal } from '../../src/components/Modal';
+import { Modal, ModalHost, mostrarModal, mostrarModalError } from '../../src/components/Modal';
 import { Colors } from '../../src/styles/styles';
+import { marcarArranque } from '../../src/services/arranque';
 
 describe('Modal', () => {
   it('muestra título, mensaje y los dos botones, y cada uno responde a su pulsación', async () => {
@@ -83,6 +84,27 @@ describe('Modal', () => {
       const estilo = StyleSheet.flatten(getByTestId('modal-boton-derecho').props.style) as any;
       expect(estilo.backgroundColor).toBe(Colors.black);
       expect(estilo.borderColor).toBe(Colors.black);
+    });
+  });
+
+  describe('durante el splash', () => {
+    afterEach(() => marcarArranque(false));
+
+    it('un modal pedido mientras se ve el splash espera y sale cuando el splash cede la pantalla', async () => {
+      const { queryByText, getByText } = await render(<ModalHost />);
+      marcarArranque(true);
+      await act(async () => mostrarModal('Aviso', 'Mensaje'));
+      expect(queryByText('Aviso')).toBeNull();
+
+      await act(async () => marcarArranque(false));
+      expect(getByText('Aviso')).toBeTruthy();
+    });
+
+    it('el modal de error fatal sí sale encima del splash', async () => {
+      const { getByText } = await render(<ModalHost />);
+      marcarArranque(true);
+      await act(async () => mostrarModalError('Algo ha salido mal', 'No puede continuar.', 'registro'));
+      expect(getByText('Algo ha salido mal')).toBeTruthy();
     });
   });
 });

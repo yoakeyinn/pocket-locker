@@ -1,26 +1,27 @@
 import { t } from '../styles/i18n';
+import { useTema } from '../styles/styles';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AppState } from 'react-native';
 import { mostrarModal } from '../components/Modal';
 import { router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import BluetoothService, { DispositivoBT, SIN_NOMBRE, useBluetooth } from '../services/BluetoothService';
-import { DEFAULT_SECURITY_PIN, USUARIO_POR_DEFECTO, esLocker, esPinValido } from '../services/comun';
+import { USUARIO_POR_DEFECTO, esLocker, esPinValido } from '../services/comun';
+import { pedirPermisosBluetooth } from '../services/Permisos';
+import { cerrarAplicacion } from '../services/Salir';
 import { LogService } from '../services/StorageService';
-import {
-  DeviceDiscoveryListView,
-  ModalVincularDispositivo,
-  BluetoothPermissionBlockedView,
-  RadarScannerView,
-} from '../components/buscar/BuscarComponents';
+import { BluetoothPermissionBlockedView } from '../components/buscar/BluetoothPermissionBlockedView';
+import { DeviceDiscoveryListView } from '../components/buscar/DeviceDiscoveryListView';
+import { ModalVincularDispositivo } from '../components/buscar/ModalVincularDispositivo';
+import { RadarScannerView } from '../components/buscar/RadarScannerView';
 
-const ESPERA_AVISO_MS = 1000;
+const ESPERA_CONFIRMACION_MS = 1000;
 const BUSQUEDA_AUTO_MS = 7000;
 const LIMITE_AUTO_MS = 15000;
+const VIGILANCIA_BLUETOOTH_MS = 1500;
 
 const esperar = (ms: number) => new Promise<void>((resolver) => setTimeout(resolver, ms));
 
-// Añade un dispositivo encontrado a la lista, o lo actualiza si ya estaba (misma dirección).
 const fusionar = (lista: DispositivoBT[], nuevo: DispositivoBT): DispositivoBT[] => {
   const indice = lista.findIndex((d) => d.address.toLowerCase() === nuevo.address.toLowerCase());
   if (indice < 0) return [...lista, nuevo];
@@ -30,6 +31,7 @@ const fusionar = (lista: DispositivoBT[], nuevo: DispositivoBT): DispositivoBT[]
 };
 
 export default function BuscarScreen() {
+  useTema();
   const { userName, actualizarDispositivoVinculado } = useBluetooth();
 
   const [modoConexion, setModoConexion] = useState<'auto' | 'manual'>('auto');
@@ -47,10 +49,12 @@ export default function BuscarScreen() {
   const [guardando, setGuardando] = useState(false);
   const [faltanPermisos, setFaltanPermisos] = useState(false);
   const [bluetoothNoDisponible, setBluetoothNoDisponible] = useState(false);
+  const [bluetoothApagado, setBluetoothApagado] = useState(false);
 
   const autoDetectadoRef = useRef(false);
   const autoIniciadoRef = useRef(false);
   const busquedaEnProgresoRef = useRef(false);
+  const apagadoRef = useRef(false);
   const autoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const detenerLimiteAuto = useCallback(() => {
@@ -75,7 +79,24 @@ export default function BuscarScreen() {
     }
   }, []);
 
-  // Empareja el dispositivo, lo guarda como el vinculado y entra en la pantalla principal.
+  const marcarApagado = useCallback(() => {
+    apagadoRef.current = true;
+    setBluetoothApagado(true);
+    setDispositivos([]);
+    setEscaneando(false);
+    setRefrescando(false);
+    BluetoothService.cancelarDescubrimiento().catch(() => {});
+  }, []);
+
+  const avisarBluetoothNoDisponible = useCallback(
+    () =>
+      mostrarModal(t('pl_bt_no_disponible_titulo'), t('pl_bt_no_disponible_mensaje'), [
+        { text: t('pl_salir'), rojo: true, onPress: cerrarAplicacion },
+        { text: t('pl_ajustes'), onPress: onAbrirAjustesBluetooth },
+      ]),
+    [onAbrirAjustesBluetooth]
+  );
+
   const vincularYEntrar = useCallback(
     async (dispositivo: DispositivoBT, nombre: string, pin: string) => {
       await BluetoothService.vincularDispositivo(dispositivo.address);
@@ -113,38 +134,36 @@ export default function BuscarScreen() {
     try {
       if (!(await BluetoothService.esSoportado())) {
         setBluetoothNoDisponible(true);
-        mostrarModal(t('pl_bt_no_disponible_titulo'), t('pl_bt_no_disponible_mensaje'));
+        avisarBluetoothNoDisponible();
         return;
       }
-      if (!(await BluetoothService.solicitarPermisos())) {
+      if (!(await pedirPermisosBluetooth())) {
         setFaltanPermisos(true);
         return;
       }
       setFaltanPermisos(false);
 
       if (!(await BluetoothService.estaEncendido())) {
-        const activado = await BluetoothService.pedirActivar();
-        if (!activado) {
-          mostrarModal(
-            t('pl_bt_apagado_titulo'),
-            t('pl_bt_apagado_mensaje', { app: t('pl_app_titulo') }),
-            [{ text: t('pl_cancelar'), style: 'cancel' }, { text: t('pl_abrir_ajustes'), onPress: onAbrirAjustesBluetooth }]
-          );
-          return;
-        }
+        marcarApagado();
+        return;
       }
+      apagadoRef.current = false;
+      setBluetoothApagado(false);
+      setBluetoothNoDisponible(false);
 
-      const lista = await BluetoothService.listarDispositivos((nuevo) => setDispositivos((prev) => fusionar(prev, nuevo)));
-      setDispositivos(lista);
+      const lista = await BluetoothService.listarDispositivos((nuevo) => {
+        if (!apagadoRef.current) setDispositivos((prev) => fusionar(prev, nuevo));
+      });
+      if (!apagadoRef.current) setDispositivos(lista);
     } catch (e: any) {
       LogService.error('[Buscar] La búsqueda manual de dispositivos falló', e);
-      mostrarModal(t('pl_aviso'), e?.message || t('pl_busqueda_fallida'));
+      mostrarModal(t('pl_aviso'), t('pl_busqueda_fallida'));
     } finally {
       setEscaneando(false);
       setRefrescando(false);
       busquedaEnProgresoRef.current = false;
     }
-  }, [onAbrirAjustesBluetooth]);
+  }, [avisarBluetoothNoDisponible, marcarApagado]);
 
   const pasarAManual = useCallback(() => {
     busquedaEnProgresoRef.current = false;
@@ -179,18 +198,15 @@ export default function BuscarScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       BluetoothService.cancelarDescubrimiento().catch(() => {});
 
-      await esperar(ESPERA_AVISO_MS);
+      await esperar(ESPERA_CONFIRMACION_MS);
       if (!(await confirmarVinculacionDirecta(dev))) {
         pasarAManual();
         return;
       }
 
-      try {
-        await vincularYEntrar(dev, t('pl_app_titulo'), DEFAULT_SECURITY_PIN);
-      } catch (autoErr) {
-        LogService.error('[Buscar] La vinculación automática falló', autoErr);
-        setModoConexion('manual');
-      }
+      setDispositivos((prev) => fusionar(prev, dev));
+      setModoConexion('manual');
+      iniciarVinculacion(dev);
     };
 
     try {
@@ -208,12 +224,16 @@ export default function BuscarScreen() {
       setFaltanPermisos(false);
 
       if (!(await BluetoothService.estaEncendido())) {
+        marcarApagado();
         setModoConexion('manual');
         return;
       }
+      apagadoRef.current = false;
+      setBluetoothApagado(false);
+      setBluetoothNoDisponible(false);
 
       const lista = await BluetoothService.listarDispositivos((dev) => {
-        if (!autoDetectadoRef.current && esLocker(dev)) vincularLockerDirecto(dev);
+        if (!autoDetectadoRef.current && !apagadoRef.current && esLocker(dev)) vincularLockerDirecto(dev);
       }, BUSQUEDA_AUTO_MS);
 
       if (!autoDetectadoRef.current) {
@@ -231,7 +251,7 @@ export default function BuscarScreen() {
     } finally {
       busquedaEnProgresoRef.current = false;
     }
-  }, [pasarAManual, detenerLimiteAuto, vincularYEntrar]);
+  }, [pasarAManual, detenerLimiteAuto, iniciarVinculacion, marcarApagado]);
 
   const confirmarVinculacion = useCallback(async () => {
     if (!dispositivoSeleccionado) return;
@@ -282,6 +302,35 @@ export default function BuscarScreen() {
   }, [ejecutarAutoConexion, detenerLimiteAuto]);
 
   useEffect(() => {
+    if (faltanPermisos || bluetoothNoDisponible) return;
+    const vigilante = setInterval(async () => {
+      let encendido = true;
+      try {
+        encendido = await BluetoothService.estaEncendido();
+      } catch (e) {
+        LogService.warn('[Buscar] No se pudo comprobar si el Bluetooth está encendido', e);
+      }
+      if (!encendido && !apagadoRef.current) {
+        detenerLimiteAuto();
+        autoDetectadoRef.current = true;
+        busquedaEnProgresoRef.current = false;
+        marcarApagado();
+        setModoConexion('manual');
+      } else if (encendido && apagadoRef.current) {
+        apagadoRef.current = false;
+        setBluetoothApagado(false);
+        buscarDispositivos(false);
+      }
+    }, VIGILANCIA_BLUETOOTH_MS);
+    return () => clearInterval(vigilante);
+  }, [faltanPermisos, bluetoothNoDisponible, detenerLimiteAuto, marcarApagado, buscarDispositivos]);
+
+  const activarBluetooth = useCallback(async () => {
+    const activado = await BluetoothService.pedirActivar();
+    if (!activado) LogService.info('[Buscar] El usuario no activó el Bluetooth desde la aplicación');
+  }, []);
+
+  useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active' && modoConexion === 'auto') {
         autoIniciadoRef.current = false;
@@ -316,12 +365,16 @@ export default function BuscarScreen() {
         refrescando={refrescando}
         onBuscar={buscarDispositivos}
         onReintentarAuto={() => {
+          if (bluetoothNoDisponible) return avisarBluetoothNoDisponible();
           autoDetectadoRef.current = false;
           busquedaEnProgresoRef.current = false;
           ejecutarAutoConexion();
         }}
         onSeleccionarDispositivo={iniciarVinculacion}
+        bluetoothApagado={bluetoothApagado}
+        onActivarBluetooth={activarBluetooth}
         onAbrirAjustesBluetooth={onAbrirAjustesBluetooth}
+        onIrAjustes={() => router.push('/ajustes')}
         bluetoothNoDisponible={bluetoothNoDisponible}
       />
       <ModalVincularDispositivo

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Animated, Easing } from 'react-native';
 import { Estrella } from './Estrella';
-import { ESTRELLA_APAGADA } from '../styles/styles';
+import { Colors } from '../styles/styles';
 
 export const GIRO_CARGANDO_MS = 8000;
 
@@ -10,9 +10,7 @@ export interface CargandoProps {
   color?: string;
 }
 
-// Indicador de carga de toda la aplicación (sustituye a la rueda del sistema): la estrella
-// apagada del splash, que gira sobre sí misma muy despacio.
-export const Cargando: React.FC<CargandoProps> = ({ tamano = 24, color = ESTRELLA_APAGADA }) => {
+export const Cargando: React.FC<CargandoProps> = ({ tamano = 24, color = Colors.silver }) => {
   const [giro] = useState(() => new Animated.Value(0));
 
   useEffect(() => {

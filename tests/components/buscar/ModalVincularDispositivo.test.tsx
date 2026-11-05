@@ -7,8 +7,9 @@ jest.mock('react-native-ble-plx', () => ({ BleManager: jest.fn() }));
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { render } from '@testing-library/react-native';
-import { ModalVincularDispositivo } from '../../src/components/buscar/BuscarComponents';
-import { Colors } from '../../src/styles/styles';
+import { ModalVincularDispositivo } from '../../../src/components/buscar/ModalVincularDispositivo';
+import { activarSimulacion, desactivarSimulacion } from '../../../src/services/Simulacion';
+import { Colors } from '../../../src/styles/styles';
 
 const modal = (extra: Partial<React.ComponentProps<typeof ModalVincularDispositivo>> = {}) => (
   <ModalVincularDispositivo
@@ -27,9 +28,7 @@ const modal = (extra: Partial<React.ComponentProps<typeof ModalVincularDispositi
 const borde = (el: any) => (StyleSheet.flatten(el.props.style) as any).borderColor;
 
 describe('modal de vincular dispositivo', () => {
-  afterEach(() => {
-    delete process.env.EXPO_PUBLIC_SIMULAR_BT;
-  });
+  afterEach(() => desactivarSimulacion());
 
   it('un usuario normal no ve el PIN entre paréntesis', async () => {
     const { getByText, queryByText } = await render(modal());
@@ -37,8 +36,8 @@ describe('modal de vincular dispositivo', () => {
     expect(queryByText(/2415/)).toBeNull();
   });
 
-  it('en la simulación sí se muestra el PIN', async () => {
-    process.env.EXPO_PUBLIC_SIMULAR_BT = '1';
+  it('en el modo demo sí se muestra el PIN', async () => {
+    activarSimulacion();
     const { getByText } = await render(modal());
     expect(getByText('Introduce el PIN de seguridad (2415) para vincular este Pocket Locker.')).toBeTruthy();
   });

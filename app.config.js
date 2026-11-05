@@ -129,6 +129,10 @@ module.exports = ({ config }) => {
       'expo-font',
       'react-native-ble-plx',
       'expo-secure-store',
+      [
+        'expo-local-authentication',
+        { faceIDPermission: 'Pocket Locker usa Face ID para proteger el acceso a la aplicación.' },
+      ],
     ],
     extra: {
       router: {},

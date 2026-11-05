@@ -6,6 +6,9 @@ import SplashScreen from '../../src/app/index';
 import tw from '../../src/styles/styles';
 import { mostrarModal } from '../../src/components/Modal';
 import BluetoothService from '../../src/services/BluetoothService';
+import { useArranque } from '../../src/services/arranque';
+import { usePreferencias } from '../../src/services/preferencias';
+import { Biometria } from '../../src/services/Biometria';
 
 const mockBt = BluetoothService as unknown as Record<string, jest.Mock>;
 
@@ -15,6 +18,7 @@ jest.mock('../../src/services/BluetoothService', () => ({
   default: {
     esSoportado: jest.fn(),
     estaEncendido: jest.fn(),
+    tienePermisos: jest.fn(),
     solicitarPermisos: jest.fn(),
     pedirActivar: jest.fn(),
     abrirAjustesBluetooth: jest.fn(),
@@ -35,6 +39,8 @@ jest.mock('expo-router', () => ({
 const estilo = (el: any) => StyleSheet.flatten(el.props.style) as Record<string, any>;
 
 describe('SplashScreen', () => {
+  beforeEach(() => usePreferencias.setState({ cargadas: true, biometria: false, desbloqueada: false }));
+
   it('muestra la imagen del icono de la app', async () => {
     const { getByLabelText } = await render(<SplashScreen />);
     expect(getByLabelText('Pocket Locker')).toBeTruthy();
@@ -67,29 +73,110 @@ describe('SplashScreen', () => {
     });
     afterEach(() => jest.useRealTimers());
 
-    it('pasa a /buscar tras 3 s si no hay dispositivo vinculado', async () => {
+    it('dura 1 s en total: pasa a /buscar si no hay dispositivo vinculado', async () => {
       Object.assign(mockEstado, { cargando: false, deviceMac: null, userName: 'Ana' });
       await render(<SplashScreen />);
-      await avanzar(2000);
+      await avanzar(900);
       expect(router.replace).not.toHaveBeenCalled();
-      await avanzar(2000);
+      await avanzar(200);
       expect(router.replace).toHaveBeenCalledWith('/buscar');
     });
 
     it('pasa a /puertas si hay dispositivo vinculado', async () => {
       Object.assign(mockEstado, { cargando: false, deviceMac: 'AA:BB', userName: 'Ana' });
       await render(<SplashScreen />);
-      await avanzar(3000);
-      await avanzar(1000);
+      await avanzar(750);
+      await avanzar(250);
       expect(router.replace).toHaveBeenCalledWith('/puertas');
     });
 
-    it('pasa a /nombre si todavía no hay nombre de usuario, aunque haya dispositivo', async () => {
-      Object.assign(mockEstado, { cargando: false, deviceMac: 'AA:BB', userName: null });
+    it('la primera vez (sin nombre de usuario) el splash dura 3 s y va a /login', async () => {
+      Object.assign(mockEstado, { cargando: false, deviceMac: null, userName: null });
       await render(<SplashScreen />);
-      await avanzar(3000);
+      await avanzar(2900);
+      expect(router.replace).not.toHaveBeenCalled();
+      await avanzar(200);
+      expect(router.replace).toHaveBeenCalledWith('/login');
+    });
+
+    it('con nombre guardado el splash dura 1 s', async () => {
+      Object.assign(mockEstado, { cargando: false, deviceMac: 'AA:BB', userName: 'Ana' });
+      await render(<SplashScreen />);
+      await avanzar(900);
+      expect(router.replace).not.toHaveBeenCalled();
+      await avanzar(200);
+      expect(router.replace).toHaveBeenCalledWith('/puertas');
+    });
+
+    it('marca el arranque en curso mientras se ve y lo libera justo antes de navegar', async () => {
+      Object.assign(mockEstado, { cargando: false, deviceMac: null, userName: 'Ana' });
+      await render(<SplashScreen />);
+      expect(useArranque.getState().enCurso).toBe(true);
+
+      await avanzar(750);
+      await avanzar(250);
+      expect(router.replace).toHaveBeenCalled();
+      expect(useArranque.getState().enCurso).toBe(false);
+    });
+
+    it('libera el arranque si se desmonta antes de terminar', async () => {
+      const { unmount } = await render(<SplashScreen />);
+      expect(useArranque.getState().enCurso).toBe(true);
+      await unmount();
+      expect(useArranque.getState().enCurso).toBe(false);
+    });
+
+    it('con el bloqueo activado no sale del splash hasta verificar la identidad; al verificar, va a su destino', async () => {
+      Object.assign(mockEstado, { cargando: false, deviceMac: 'AA:BB', userName: 'Ana' });
+      usePreferencias.setState({ biometria: true, desbloqueada: false });
+      let resolver!: (ok: boolean) => void;
+      const autenticar = jest.spyOn(Biometria, 'autenticar').mockImplementation(() => new Promise((r) => (resolver = r)));
+      await render(<SplashScreen />);
+      await avanzar(750);
+      await avanzar(500);
+      expect(autenticar).toHaveBeenCalledTimes(1);
+      expect(router.replace).not.toHaveBeenCalled();
+
+      await act(async () => resolver(true));
+      await avanzar(300);
+      expect(usePreferencias.getState().desbloqueada).toBe(true);
+      expect(router.replace).toHaveBeenCalledWith('/puertas');
+      autenticar.mockRestore();
+    });
+
+    it('si se cancela la verificación se vuelve a pedir y no se entra', async () => {
+      Object.assign(mockEstado, { cargando: false, deviceMac: 'AA:BB', userName: 'Ana' });
+      usePreferencias.setState({ biometria: true, desbloqueada: false });
+      const autenticar = jest.spyOn(Biometria, 'autenticar').mockResolvedValue(false);
+      await render(<SplashScreen />);
+      await avanzar(750);
+      await avanzar(100);
+      expect(autenticar).toHaveBeenCalledTimes(1);
+      await avanzar(1100);
+      expect(autenticar.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(router.replace).not.toHaveBeenCalled();
+      autenticar.mockRestore();
+    });
+
+    it('con la huella activada pero ya desbloqueada en esta sesión va directo a su destino', async () => {
+      Object.assign(mockEstado, { cargando: false, deviceMac: 'AA:BB', userName: 'Ana' });
+      usePreferencias.setState({ biometria: true, desbloqueada: true });
+      await render(<SplashScreen />);
+      await avanzar(750);
+      await avanzar(250);
+      expect(router.replace).toHaveBeenCalledWith('/puertas');
+    });
+
+    it('espera a que se hayan leído las preferencias (tema y huella) antes de salir', async () => {
+      Object.assign(mockEstado, { cargando: false, deviceMac: null, userName: 'Ana' });
+      usePreferencias.setState({ cargadas: false });
+      await render(<SplashScreen />);
+      await avanzar(10000);
+      expect(router.replace).not.toHaveBeenCalled();
+
+      await act(async () => usePreferencias.setState({ cargadas: true }));
       await avanzar(1000);
-      expect(router.replace).toHaveBeenCalledWith('/nombre');
+      expect(router.replace).toHaveBeenCalledWith('/buscar');
     });
 
     it('espera mientras los datos siguen cargando', async () => {
@@ -114,6 +201,7 @@ describe('SplashScreen', () => {
       Object.values(mockBt).forEach((f) => f.mockReset());
       mockBt.esSoportado.mockResolvedValue(true);
       mockBt.estaEncendido.mockResolvedValue(false);
+      mockBt.tienePermisos.mockResolvedValue(true);
       mockBt.solicitarPermisos.mockResolvedValue(true);
       mockBt.pedirActivar.mockResolvedValue(true);
       mockBt.abrirAjustesBluetooth.mockResolvedValue(undefined);
@@ -121,6 +209,7 @@ describe('SplashScreen', () => {
     afterEach(() => jest.useRealTimers());
 
     const botones = () => (mostrarModal as jest.Mock).mock.calls[0][2] as { text: string; onPress: () => void }[];
+    const botonesDelUltimo = () => (mostrarModal as jest.Mock).mock.lastCall![2] as { text: string; onPress: () => void }[];
 
     it('con el Bluetooth apagado no avisa en el splash: navega y avisa ya en la pantalla siguiente', async () => {
       const orden: string[] = [];
@@ -134,22 +223,67 @@ describe('SplashScreen', () => {
       expect(botones().map((b) => b.text)).toEqual(['Ir a Ajustes', 'Encender']);
     });
 
-    it('"Encender" pide primero los permisos (sin ellos Android no deja encenderlo) y luego la activación', async () => {
+    it('con el bloqueo activado el aviso del Bluetooth sale después de verificar, ya en la pantalla siguiente', async () => {
+      usePreferencias.setState({ biometria: true, desbloqueada: false });
+      const autenticar = jest.spyOn(Biometria, 'autenticar').mockResolvedValue(true);
+      await render(<SplashScreen />);
+      await avanzar(5000);
+      expect(autenticar).toHaveBeenCalled();
+      expect(router.replace).toHaveBeenCalled();
+      expect(mostrarModal).toHaveBeenCalledTimes(1);
+      autenticar.mockRestore();
+    });
+
+    it('"Encender" con los permisos ya concedidos pide directamente la activación', async () => {
       await render(<SplashScreen />);
       await avanzar(5000);
 
       await act(async () => botones()[1].onPress());
-      expect(mockBt.solicitarPermisos).toHaveBeenCalled();
+      expect(mockBt.solicitarPermisos).not.toHaveBeenCalled();
       expect(mockBt.pedirActivar).toHaveBeenCalled();
     });
 
-    it('"Encender" no pide la activación si se rechazan los permisos', async () => {
-      mockBt.solicitarPermisos.mockResolvedValue(false);
-      await render(<SplashScreen />);
-      await avanzar(5000);
+    describe('sin permisos de Bluetooth', () => {
+      beforeEach(() => mockBt.tienePermisos.mockResolvedValue(false));
 
-      await act(async () => botones()[1].onPress());
-      expect(mockBt.pedirActivar).not.toHaveBeenCalled();
+      it('"Encender" explica los permisos en un modal y, al aceptar, los pide y luego pide la activación', async () => {
+        await render(<SplashScreen />);
+        await avanzar(5000);
+
+        await act(async () => {
+          botones()[1].onPress();
+        });
+        expect((mostrarModal as jest.Mock).mock.calls[1][0]).toBe('Permisos requeridos');
+        expect(mockBt.solicitarPermisos).not.toHaveBeenCalled();
+
+        await act(async () => botonesDelUltimo().find((b) => b.text === 'Conceder permisos')!.onPress());
+        expect(mockBt.solicitarPermisos).toHaveBeenCalled();
+        expect(mockBt.pedirActivar).toHaveBeenCalled();
+      });
+
+      it('si se cancela el modal de permisos no se pide nada al sistema', async () => {
+        await render(<SplashScreen />);
+        await avanzar(5000);
+
+        await act(async () => {
+          botones()[1].onPress();
+        });
+        await act(async () => (mostrarModal as jest.Mock).mock.calls[1][2][0].onPress());
+        expect(mockBt.solicitarPermisos).not.toHaveBeenCalled();
+        expect(mockBt.pedirActivar).not.toHaveBeenCalled();
+      });
+
+      it('si se rechazan los permisos del sistema no se pide la activación', async () => {
+        mockBt.solicitarPermisos.mockResolvedValue(false);
+        await render(<SplashScreen />);
+        await avanzar(5000);
+
+        await act(async () => {
+          botones()[1].onPress();
+        });
+        await act(async () => botonesDelUltimo().find((b) => b.text === 'Conceder permisos')!.onPress());
+        expect(mockBt.pedirActivar).not.toHaveBeenCalled();
+      });
     });
 
     it('"Ir a Ajustes" abre los ajustes de Bluetooth', async () => {

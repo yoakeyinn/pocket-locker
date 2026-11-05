@@ -1,8 +1,11 @@
 import React from 'react';
 import { render, fireEvent, act } from '@testing-library/react-native';
 import { useBluetooth, BluetoothService } from '../../src/services/BluetoothService';
-import AjustesScreen, { AppInfoCard } from '../../src/app/ajustes';
+import AjustesScreen from '../../src/app/ajustes';
+import { AppInfoCard } from '../../src/components/ajustes/AppInfoCard';
 import { mostrarModal } from '../../src/components/Modal';
+import { sincronizarSimulacion, useSimulacion } from '../../src/services/Simulacion';
+import { borrarDatosApp } from '../../src/services/Reinicio';
 
 jest.mock('react-native', () => {
   const React = require('react');
@@ -48,6 +51,7 @@ jest.mock('../../src/components/Modal', () => ({ mostrarModal: jest.fn() }));
 jest.mock('../../src/components/Aparece', () => ({
   Aparece: (props: any) => require('react').createElement('View', props, props.children),
 }));
+jest.mock('../../src/components/Preferencias', () => ({ Preferencias: () => null }));
 jest.mock('../../src/components/Cargando', () => ({
   Cargando: () => require('react').createElement('Cargando'),
 }));
@@ -72,6 +76,16 @@ jest.mock('../../src/services/BluetoothService', () => ({
   },
 }));
 
+jest.mock('../../src/services/Simulacion', () => {
+  const { create } = require('zustand');
+  return {
+    useSimulacion: create(() => ({ activa: false })),
+    sincronizarSimulacion: jest.fn().mockResolvedValue(undefined),
+  };
+});
+
+jest.mock('../../src/services/Reinicio', () => ({ borrarDatosApp: jest.fn().mockResolvedValue(undefined) }));
+
 jest.mock('expo-router', () => ({
   router: {
     push: jest.fn(),
@@ -92,6 +106,7 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
   const mockConectar = jest.fn().mockResolvedValue(undefined);
   const mockDesconectar = jest.fn().mockResolvedValue(undefined);
   const mockDesvincularDispositivo = jest.fn().mockResolvedValue(undefined);
+  const mockGuardarNombre = jest.fn().mockResolvedValue(undefined);
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -102,6 +117,8 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
       conectar: mockConectar,
       desconectar: mockDesconectar,
       desvincularDispositivo: mockDesvincularDispositivo,
+      userName: 'Ana',
+      guardarNombreUsuario: mockGuardarNombre,
     });
   });
 
@@ -212,4 +229,88 @@ describe('AjustesScreen (Desconexión y Desvinculación)', () => {
     const { getByText } = await render(<AppInfoCard />);
     expect(getByText(`Pocket Locker v${require('../../package.json').version}`)).toBeTruthy();
   });
+
+  describe('nombre de usuario y modo demo', () => {
+    const editar = async (pantalla: Awaited<ReturnType<typeof render>>, nombre: string) => {
+      await act(async () => {
+        fireEvent.press(pantalla.getByTestId('btn-editar-usuario'));
+      });
+      await act(async () => {
+        fireEvent.changeText(pantalla.getByTestId('editor-texto'), nombre);
+      });
+    };
+
+    it('muestra el nombre actual', async () => {
+      const { getByTestId } = await render(<AjustesScreen />);
+      expect(getByTestId('nombre-usuario').props.children).toBe('Ana');
+    });
+
+    it('guardar un nombre nuevo lo guarda y recalcula la simulación con él (demo la activa)', async () => {
+      const pantalla = await render(<AjustesScreen />);
+      await editar(pantalla, '  demo ');
+      await act(async () => {
+        fireEvent.press(pantalla.getByTestId('editor-guardar'));
+      });
+      expect(mockGuardarNombre).toHaveBeenCalledWith('demo');
+      expect(sincronizarSimulacion).toHaveBeenCalledWith('demo');
+    });
+
+    it('un nombre vacío no se guarda', async () => {
+      const pantalla = await render(<AjustesScreen />);
+      await editar(pantalla, '   ');
+      await act(async () => {
+        fireEvent.press(pantalla.getByTestId('editor-guardar'));
+      });
+      expect(mockGuardarNombre).not.toHaveBeenCalled();
+      expect(mostrarModal).toHaveBeenCalled();
+    });
+
+    it('avisa de que es modo demo cuando la simulación está activa', async () => {
+      useSimulacion.setState({ activa: true });
+      const { getByTestId } = await render(<AjustesScreen />);
+      expect(getByTestId('aviso-demo')).toBeTruthy();
+      useSimulacion.setState({ activa: false });
+    });
+  });
+
+  describe('borrar datos de la aplicación', () => {
+    const abrir = async (pantalla: Awaited<ReturnType<typeof render>>) => {
+      await act(async () => {
+        fireEvent.press(pantalla.getByTestId('btn-borrar-datos'));
+      });
+      return (mostrarModal as jest.Mock).mock.lastCall as [string, string, { text: string; style?: string; onPress?: () => any }[]];
+    };
+
+    it('pide confirmación antes de borrar nada', async () => {
+      const pantalla = await render(<AjustesScreen />);
+      const [titulo, mensaje, botones] = await abrir(pantalla);
+      expect(titulo).toBe('Borrar datos de la aplicación');
+      expect(mensaje).toMatch(/no se puede deshacer/);
+      expect(botones.map((b) => b.text)).toEqual(['Cancelar', 'Borrar']);
+      expect(borrarDatosApp).not.toHaveBeenCalled();
+    });
+
+    it('al confirmar borra todo y vuelve al principio (splash)', async () => {
+      const pantalla = await render(<AjustesScreen />);
+      const [, , botones] = await abrir(pantalla);
+      await act(async () => {
+        await botones[1].onPress?.();
+      });
+      expect(borrarDatosApp).toHaveBeenCalledTimes(1);
+      expect(require('expo-router').router.replace).toHaveBeenCalledWith('/');
+    });
+
+    it('si falla el borrado avisa y no navega', async () => {
+      (borrarDatosApp as jest.Mock).mockRejectedValueOnce(new Error('disco'));
+      const pantalla = await render(<AjustesScreen />);
+      const [, , botones] = await abrir(pantalla);
+      (require('expo-router').router.replace as jest.Mock).mockClear();
+      await act(async () => {
+        await botones[1].onPress?.();
+      });
+      expect(require('expo-router').router.replace).not.toHaveBeenCalled();
+      expect((mostrarModal as jest.Mock).mock.lastCall![1]).toMatch(/No se han podido borrar los datos/);
+    });
+  });
 });
+

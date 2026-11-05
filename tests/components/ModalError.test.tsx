@@ -1,8 +1,16 @@
+jest.mock('../../src/services/StorageService', () => ({ LogService: { info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
+jest.mock('expo-file-system/legacy', () => ({
+  cacheDirectory: 'file:///cache/',
+  readDirectoryAsync: jest.fn().mockResolvedValue(['a.tmp', 'b.tmp']),
+  deleteAsync: jest.fn().mockResolvedValue(undefined),
+}));
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn().mockResolvedValue(true) }));
 
 import React from 'react';
-import { BackHandler, Platform, StyleSheet } from 'react-native';
-import { act, fireEvent, render } from '@testing-library/react-native';
+import { NativeModules, Platform, StyleSheet } from 'react-native';
+import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import * as FileSystem from 'expo-file-system/legacy';
+import salirApp from 'react-native-exit-app';
 import * as Clipboard from 'expo-clipboard';
 import tw from '../../src/styles/styles';
 import { ModalHost, mostrarModal, mostrarModalError } from '../../src/components/Modal';
@@ -10,9 +18,12 @@ import { ModalHost, mostrarModal, mostrarModalError } from '../../src/components
 const INFORME = 'Pocket Locker v1.4.0 - informe de error\nERROR\nError: algo ha fallado\nPila: en puertas.tsx:10';
 
 describe('modal de error fatal (mostrarModalError)', () => {
+  beforeAll(() => {
+    (NativeModules as any).RNExitApp = {};
+  });
+
   beforeEach(() => {
     (Platform as any).OS = 'android';
-    jest.spyOn(BackHandler, 'exitApp').mockImplementation(() => true);
   });
   afterEach(() => jest.restoreAllMocks());
 
@@ -71,14 +82,16 @@ describe('modal de error fatal (mostrarModalError)', () => {
     expect(getByText('Copiado')).toBeTruthy();
   });
 
-  it('"Cerrar" cierra la aplicación', async () => {
+  it('"Cerrar" cierra la aplicación del todo y limpia la caché', async () => {
     const { getByTestId } = await render(<ModalHost />);
     await act(async () => mostrarModalError('Algo ha salido mal', 'No puede continuar.', INFORME));
 
     await act(async () => {
       fireEvent.press(getByTestId('modal-boton-derecho'));
     });
-    expect(BackHandler.exitApp).toHaveBeenCalled();
+    await waitFor(() => expect(salirApp.exitApp).toHaveBeenCalled());
+    expect(FileSystem.deleteAsync).toHaveBeenCalledWith('file:///cache/a.tmp', { idempotent: true });
+    expect(FileSystem.deleteAsync).toHaveBeenCalledWith('file:///cache/b.tmp', { idempotent: true });
   });
 
   it('un modal normal posterior no tapa el error fatal', async () => {

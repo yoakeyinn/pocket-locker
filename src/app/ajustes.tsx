@@ -1,51 +1,32 @@
-import { t } from '../styles/i18n';
-import React, { useState, useEffect, useCallback } from 'react';
+import { t, useIdioma } from '../styles/i18n';
+import { useState, useEffect, useCallback } from 'react';
 import { ScrollView, TouchableOpacity, View } from 'react-native';
+import { AppInfoCard } from '../components/ajustes/AppInfoCard';
+import { EditorTexto } from '../components/ajustes/EditorTexto';
+import { Boton } from '../components/Boton';
 import { Cargando } from '../components/Cargando';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useBluetooth, BluetoothService } from '../services/BluetoothService';
-import { BotonIcono } from '../components/BotonIcono';
+import { BotonIcono, ANCHO_BOTON_ICONO } from '../components/BotonIcono';
 import { LogService } from '../services/StorageService';
 import { mostrarModal } from '../components/Modal';
+import { Preferencias } from '../components/Preferencias';
 import { SinDispositivoCard } from '../components/SinDispositivoCard';
-import { Text, TextInput } from '../styles/tipografia/Tipografia';
-import tw, { APP_VERSION, Colors } from '../styles/styles';
-
-export const AppInfoCard: React.FC = () => (
-  <View style={tw`items-center justify-center py-6 mb-8`}>
-    <Text style={tw`text-xs font-bold text-black tracking-wider`}>{`${t('pl_app_titulo')} v${APP_VERSION}`}</Text>
-    <Text style={tw`text-xs text-gray mt-1`}>ESP32 Multi-User & Secure Storage Edition</Text>
-  </View>
-);
+import { Text } from '../styles/tipografia/Tipografia';
+import tw, { Colors, useTema } from '../styles/styles';
+import { borrarDatosApp } from '../services/Reinicio';
+import { sincronizarSimulacion } from '../services/Simulacion';
 
 const ETIQUETA = 'text-xs font-bold text-gray uppercase tracking-wider';
 
-const EditorTexto: React.FC<{
-  value: string;
-  onChangeText: (texto: string) => void;
-  onGuardar: () => void;
-  onCancelar: () => void;
-}> = ({ value, onChangeText, onGuardar, onCancelar }) => (
-  <View style={tw`flex-row items-center mt-1`}>
-    <TextInput
-      style={tw`flex-1 bg-silver border border-silver rounded-xl px-3 py-1.5 text-sm font-bold text-black`}
-      value={value}
-      onChangeText={onChangeText}
-      autoFocus
-    />
-    <TouchableOpacity onPress={onGuardar} style={tw`ml-2 px-3 py-2 bg-black rounded-xl`}>
-      <MaterialIcons name="check" size={18} color={Colors.white} />
-    </TouchableOpacity>
-    <TouchableOpacity onPress={onCancelar} style={tw`ml-1 px-2 py-2 bg-silver rounded-xl`}>
-      <MaterialIcons name="close" size={18} color={Colors.gray} />
-    </TouchableOpacity>
-  </View>
-);
-
 export default function AjustesScreen() {
+  useTema();
+  useIdioma();
   const {
+    userName,
+    guardarNombreUsuario,
     deviceName,
     deviceMac,
     status,
@@ -58,6 +39,8 @@ export default function AjustesScreen() {
   const [procesando, setProcesando] = useState(false);
   const [editandoNombre, setEditandoNombre] = useState(false);
   const [nombreInput, setNombreInput] = useState(deviceName || t('pl_app_titulo'));
+  const [editandoUsuario, setEditandoUsuario] = useState(false);
+  const [usuarioInput, setUsuarioInput] = useState(userName || '');
 
   useEffect(() => {
     if (deviceName) setNombreInput(deviceName);
@@ -81,6 +64,22 @@ export default function AjustesScreen() {
       setProcesando(false);
     }
   }, [status, conectar, desconectar]);
+
+  const handleGuardarUsuario = useCallback(async () => {
+    const limpio = usuarioInput.trim();
+    if (!limpio) {
+      mostrarModal(t('pl_nombre'), t('pl_login_requerido'));
+      return;
+    }
+    try {
+      await guardarNombreUsuario(limpio);
+      await sincronizarSimulacion(limpio);
+      setEditandoUsuario(false);
+    } catch (e) {
+      LogService.error('[Ajustes] No se pudo guardar el nombre de usuario', e);
+      mostrarModal('Error', 'No se pudo guardar el nombre.');
+    }
+  }, [usuarioInput, guardarNombreUsuario]);
 
   const handleGuardarNombre = useCallback(async () => {
     const limpio = nombreInput.trim();
@@ -131,10 +130,31 @@ export default function AjustesScreen() {
     );
   }, [deviceMac, desconectar, desvincularDispositivo]);
 
+  const handleBorrarDatos = useCallback(() => {
+    mostrarModal(t('pl_borrar_datos'), t('pl_borrar_datos_mensaje'), [
+      { text: t('pl_cancelar'), style: 'cancel' },
+      {
+        text: t('pl_borrar'),
+        onPress: async () => {
+          try {
+            setProcesando(true);
+            await borrarDatosApp();
+            router.replace('/');
+          } catch (e) {
+            LogService.error('[Ajustes] No se pudieron borrar los datos de la aplicación', e);
+            mostrarModal(t('pl_aviso'), t('pl_borrar_datos_error'));
+          } finally {
+            setProcesando(false);
+          }
+        },
+      },
+    ]);
+  }, []);
+
   const estaConectado = status === 'connected';
 
   return (
-    <SafeAreaView style={tw`flex-1 bg-beige`} edges={['top']}>
+    <SafeAreaView style={tw`flex-1 bg-beige`} edges={['top', 'bottom']}>
       <ScrollView
         contentContainerStyle={tw`p-5 pb-16 flex-grow`}
         keyboardShouldPersistTaps="handled"
@@ -142,15 +162,47 @@ export default function AjustesScreen() {
       >
         <View style={tw`flex-row items-center justify-between mb-4`}>
           <BotonIcono
+            conBoton
             testID="btn-volver-ajustes"
             icono="arrow-back"
             onPress={() => (router.canGoBack() ? router.back() : router.replace('/puertas'))}
           />
           <Text style={tw`font-display text-xl font-bold text-black`}>Ajustes</Text>
-          <View style={tw`w-10`} />
+          <View style={{ width: ANCHO_BOTON_ICONO }} />
         </View>
 
         <Text style={tw`text-sm text-gray mb-6`}>Gestión de la conexión con tu dispositivo</Text>
+
+        <View style={tw`bg-white rounded-3xl p-5 shadow-sm border border-silver/60 mb-6`}>
+          <Text style={tw`${ETIQUETA}`}>{t('pl_nombre')}</Text>
+          {editandoUsuario ? (
+            <EditorTexto
+              value={usuarioInput}
+              onChangeText={setUsuarioInput}
+              onGuardar={handleGuardarUsuario}
+              onCancelar={() => {
+                setUsuarioInput(userName || '');
+                setEditandoUsuario(false);
+              }}
+            />
+          ) : (
+            <View style={tw`flex-row items-center mt-0.5`}>
+              <Text testID="nombre-usuario" style={tw`text-lg font-bold text-black mr-2`} numberOfLines={1}>
+                {userName || '-'}
+              </Text>
+              <TouchableOpacity
+                testID="btn-editar-usuario"
+                onPress={() => {
+                  setUsuarioInput(userName || '');
+                  setEditandoUsuario(true);
+                }}
+                style={tw`p-1 rounded-lg bg-silver`}
+              >
+                <MaterialIcons name="edit" size={15} color={Colors.black} />
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
 
         {deviceMac ? (
           <View style={tw`bg-white rounded-3xl p-5 shadow-sm border border-silver/60 mb-6`}>
@@ -248,6 +300,22 @@ export default function AjustesScreen() {
             <SinDispositivoCard onBuscar={() => router.replace('/buscar')} />
           </View>
         )}
+
+        <Text style={[tw`${ETIQUETA} mb-2`]}>{t('pl_login_preferencias')}</Text>
+        <View style={tw`mb-6`}>
+          <Preferencias />
+        </View>
+
+        <View style={tw`mb-2`}>
+          <Boton
+            rojo
+            testID="btn-borrar-datos"
+            icono="delete-outline"
+            texto={t('pl_borrar_datos')}
+            deshabilitado={procesando}
+            onPress={handleBorrarDatos}
+          />
+        </View>
 
         <AppInfoCard />
       </ScrollView>

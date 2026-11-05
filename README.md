@@ -41,15 +41,13 @@ Los relés se activan en nivel bajo. Para probar con LEDs (GPIO → resistencia 
 
 La app solo enseña las puertas que autoriza el código; las restricciones reales las aplica el ESP32.
 
-## Probar la app sin ESP32
+## Probar la app sin ESP32 (modo demo)
 
 ```bash
-npm run simular                       # con un locker ya vinculado
-npm run simular -- --sin-vincular     # empieza en la búsqueda
-npm run simular -- --bluetooth-apagado
+npm start     # muestra el QR; escanéalo con Expo Go o con tu build de desarrollo
 ```
 
-Simula un adaptador Bluetooth y siete dispositivos cercanos (el PLBT entre ellos) para revisar todas las pantallas. Funciona también en Expo Go. Añade `--dev-client --tunnel` si lo necesitas.
+En la pantalla de bienvenida escribe **`demo`** como nombre. A partir de ahí la app simula el Bluetooth (diez dispositivos cercanos, el segundo es el PLBT), la vinculación y las aperturas, para recorrer todas las pantallas sin ESP32. Con cualquier otro nombre no se simula nada. Para salir del modo demo, cambia el nombre en *Ajustes*.
 
 ## Desarrollo
 

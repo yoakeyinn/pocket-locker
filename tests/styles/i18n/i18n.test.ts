@@ -44,4 +44,20 @@ describe('i18n', () => {
     expect(t('pl_dispositivos_cercanos')).toBe('Nearby devices');
     expect(t('pl_app_titulo')).toBe('Pocket Locker');
   });
+
+  it('los textos que ve el usuario no mencionan herramientas ni términos de programación', () => {
+    const prohibido = /expo|build|prebuild|metro|ESP32|dev client|desarrollo|development|debug|stack|excepci|exception/i;
+    const infractores = (Object.entries(es) as [string, string][])
+      .concat(Object.entries(en) as [string, string][])
+      .filter(([, texto]) => prohibido.test(texto))
+      .map(([clave]) => clave);
+    expect([...new Set(infractores)]).toEqual([]);
+  });
+
+  it('en inglés se escribe «smartphone», nunca «phone» suelto', () => {
+    const infractores = Object.entries(en as Record<string, string>)
+      .filter(([, texto]) => /(?<![A-Za-z])phone(?![A-Za-z])/i.test(texto))
+      .map(([clave]) => clave);
+    expect(infractores).toEqual([]);
+  });
 });

@@ -13,8 +13,6 @@ export interface CampoProps extends TextInputProps {
   clase?: string;
 }
 
-// Etiqueta + campo de texto + error debajo (a la derecha). Con error, el borde del campo se pone rojo.
-// testIDs: `input-<id>` y `error-<id>`.
 export const Campo: React.FC<CampoProps> = ({ id, etiqueta, error, clase = '', ...resto }) => (
   <View style={tw`${clase}`}>
     <Text style={tw`${ETIQUETA}`}>{etiqueta}</Text>

@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
-  BackHandler,
   Easing,
   KeyboardAvoidingView,
   Modal as ModalNativo,
@@ -14,14 +13,17 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { create } from 'zustand';
 import { Boton } from './Boton';
+import { useArranque } from '../services/arranque';
 import { t } from '../styles/i18n';
 import { Text } from '../styles/tipografia/Tipografia';
-import tw, { Colors, tipografia } from '../styles/styles';
+import tw, { Colors, tipografia, useTema } from '../styles/styles';
+import { useMargenesSeguros } from '../styles/margenes';
 
 export interface BotonModal {
   texto: string;
   onPress: () => void;
   deshabilitado?: boolean;
+  rojo?: boolean;
 }
 
 export interface ModalProps {
@@ -48,6 +50,7 @@ export const Modal: React.FC<ModalProps> = ({
   onCerrar,
 }) => {
   const [entrada] = useState(() => new Animated.Value(0));
+  const margenes = useMargenesSeguros();
 
   useEffect(() => {
     if (!visible) return;
@@ -67,10 +70,13 @@ export const Modal: React.FC<ModalProps> = ({
 
   return (
     <ModalNativo animationType="fade" transparent visible={visible} onRequestClose={onCerrar} statusBarTranslucent>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={tw`flex-1 bg-black/60`}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={[tw`flex-1`, { backgroundColor: 'rgba(0, 0, 0, 0.6)' }]}>
         <ScrollView
           style={tw`w-full`}
-          contentContainerStyle={tw`flex-grow justify-center items-center px-6 py-6`}
+          contentContainerStyle={[
+            tw`flex-grow justify-center items-center px-6`,
+            { paddingTop: margenes.top + 24, paddingBottom: margenes.bottom + 24 },
+          ]}
           keyboardShouldPersistTaps="handled"
           bounces={false}
         >
@@ -106,6 +112,7 @@ export interface BotonAlerta {
   text: string;
   style?: 'default' | 'cancel' | 'destructive';
   onPress?: () => void;
+  rojo?: boolean;
 }
 
 interface ModalPendiente {
@@ -125,7 +132,7 @@ export function mostrarModal(titulo: string, mensaje?: string, botones?: BotonAl
 }
 
 const cerrarApp = () => {
-  if (Platform.OS === 'android') BackHandler.exitApp();
+  require('../services/Salir').cerrarAplicacion();
 };
 
 export function mostrarModalError(titulo: string, mensaje: string, registro: string): void {
@@ -197,6 +204,8 @@ const PanelRegistro: React.FC<{ texto: string }> = ({ texto }) => {
 
 export const ModalHost: React.FC = () => {
   const modal = useModalStore((estado) => estado.modal);
+  const arrancando = useArranque((estado) => estado.enCurso);
+  useTema();
   const [registroVisible, setRegistroVisible] = useState(false);
   const ultimo = useRef(modal);
   if (modal) ultimo.current = modal;
@@ -217,6 +226,7 @@ export const ModalHost: React.FC = () => {
   const aBoton = (boton: BotonAlerta): BotonModal => ({
     texto: boton.text,
     onPress: pulsar(boton),
+    rojo: boton.rojo,
   });
   const ultimoBoton = botones[botones.length - 1];
 
@@ -231,7 +241,7 @@ export const ModalHost: React.FC = () => {
 
   return (
     <Modal
-      visible={!!modal}
+      visible={!!modal && (!arrancando || !!registro)}
       titulo={contenido.titulo}
       mensaje={contenido.mensaje}
       tituloEnRojo={!!registro}

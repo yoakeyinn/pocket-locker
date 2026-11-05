@@ -59,6 +59,41 @@ describe('ErrorService', () => {
     expect(informe).toContain('fallo grave');
   });
 
+  describe('informe breve', () => {
+    it('no mete URLs de Metro ni cientos de frames de React: el informe es corto', () => {
+      const error = new Error('fallo grave');
+      error.stack = [
+        'Error: fallo grave',
+        'at miFuncion (http://192.168.1.129:8081/index.bundle//&platform=android&dev=true:100:5)',
+        ...Array.from({ length: 300 }, (_, i) => `at recursivelyTraversePassiveMountEffects (http://192.168.1.129:8081/index.bundle//&x=1:${i}:3)`),
+      ].join('\n');
+      const informe = construirInforme(error, 'Prueba');
+
+      expect(informe).toContain('at miFuncion (100:5)');
+      expect(informe).not.toContain('http://');
+      expect(informe).not.toContain('recursivelyTraverse');
+      expect(informe.length).toBeLessThan(4000);
+    });
+
+    it('los avisos repetidos seguidos se juntan con (×n) y la pila de cada aviso se resume', () => {
+      for (let i = 0; i < 3; i++) {
+        LogService.warn('[BLE] BleManager no disponible', Object.assign(new Error('null'), { stack: 'Error: null\nat a (http://h:1/x:1:2)\nat b (http://h:1/x:3:4)' }));
+      }
+      const informe = construirInforme(new Error('x'), 'Prueba');
+      expect(informe).toContain('[BLE] BleManager no disponible (×3)');
+      expect(informe).toContain('at a (1:2)');
+      expect(informe).not.toContain('http://h:1');
+    });
+
+    it('incluye como mucho las últimas 40 entradas del registro', () => {
+      for (let i = 0; i < 120; i++) LogService.info(`[Prueba] entrada única número ${i}`);
+      const informe = construirInforme(new Error('x'), 'Prueba');
+      expect((informe.match(/\[Prueba\] entrada única/g) ?? []).length).toBe(40);
+      expect(informe).toContain('entrada única número 119');
+      expect(informe).not.toContain('entrada única número 70');
+    });
+  });
+
   describe('captura global de excepciones', () => {
     it('solo muestra el modal de error: una excepción fatal lo abre y una no fatal solo se registra', () => {
       const setGlobalHandler = jest.fn();
